@@ -9,9 +9,14 @@ app.use(cors({
     origin: (origin, callback) => {
         // Allow requests with no origin (mobile apps, curl, Postman)
         if (!origin) return callback(null, true);
-        // Allow localhost dev and any ngrok tunnel
-        const allowed = /localhost|127\.0\.0\.1|192\.168\.|ngrok/;
-        if (allowed.test(origin)) return callback(null, true);
+        // Allow localhost dev, ngrok tunnels, and the live Netlify frontend
+        const allowedPatterns = /localhost|127\.0\.0\.1|192\.168\.|ngrok/;
+        const allowedOrigins = [
+            'https://event-booking-platform.netlify.app'
+        ];
+        if (allowedPatterns.test(origin) || allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
         callback(new Error(`CORS blocked: ${origin}`));
     },
     credentials: true,
