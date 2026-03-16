@@ -1,0 +1,173 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model event {
+  id                            Int             @id @default(autoincrement())
+  title                         String
+  category                      String
+  description                   String          @db.Text
+  location                      String
+  eventDate                     DateTime
+  ticketPrice                   Float
+  totalTickets                  Int
+  ticketsSold                   Int             @default(0)
+  image                         String?
+  organizerId                   Int
+  reviewedById                  Int?
+  rejectionReason               String?         @db.Text
+  status                        event_status    @default(PENDING)
+  isPublic                      Boolean         @default(true)
+  sellingFastThreshold          Int             @default(20)
+  serviceFeeType                event_serviceFeeType @default(BUYER)
+  serviceFeeRate                Float           @default(0.03)
+  tags                          String?         @db.LongText
+  highlights                    String?         @db.LongText
+  createdAt                     DateTime        @default(now())
+  updatedAt                     DateTime        @updatedAt
+  user_event_organizerIdTouser  user            @relation("event_organizerIdTouser", fields: [organizerId], references: [id], map: "Event_organizerId_fkey")
+  user_event_reviewedByIdTouser user?           @relation("event_reviewedByIdTouser", fields: [reviewedById], references: [id], map: "Event_reviewedById_fkey")
+  eventimage                    eventimage[]
+  eventschedule                 eventschedule[]
+  promocode                     promocode[]
+  ticket                        ticket[]
+  ticketrelease                 ticketrelease[]
+
+  @@index([organizerId], map: "Event_organizerId_fkey")
+  @@index([reviewedById], map: "Event_reviewedById_fkey")
+}
+
+model ticketrelease {
+  id          Int       @id @default(autoincrement())
+  eventId     Int
+  name        String
+  price       Float
+  quantity    Int
+  releaseDate DateTime?
+  event       event     @relation(fields: [eventId], references: [id], onDelete: Cascade, map: "TicketRelease_eventId_fkey")
+
+  @@index([eventId], map: "TicketRelease_eventId_fkey")
+}
+
+model eventimage {
+  id           Int      @id @default(autoincrement())
+  eventId      Int
+  imageUrl     String
+  displayOrder Int      @default(0)
+  createdAt    DateTime @default(now())
+  event        event    @relation(fields: [eventId], references: [id], onDelete: Cascade, map: "EventImage_eventId_fkey")
+
+  @@index([eventId], map: "EventImage_eventId_fkey")
+}
+
+model eventschedule {
+  id         Int    @id @default(autoincrement())
+  eventId    Int
+  time       String
+  act        String
+  orderIndex Int    @default(0)
+  event      event  @relation(fields: [eventId], references: [id], onDelete: Cascade, map: "EventSchedule_eventId_fkey")
+
+  @@index([eventId], map: "EventSchedule_eventId_fkey")
+}
+
+model promocode {
+  id            Int                    @id @default(autoincrement())
+  eventId       Int
+  code          String
+  discountType  promocode_discountType
+  discountValue Float
+  maxUsage      Int                    @default(0)
+  currentUsage  Int                    @default(0)
+  expiresAt     DateTime?
+  createdAt     DateTime               @default(now())
+  event         event                  @relation(fields: [eventId], references: [id], onDelete: Cascade, map: "PromoCode_eventId_fkey")
+
+  @@unique([eventId, code], map: "PromoCode_eventId_code_key")
+}
+
+model refreshtoken {
+  id        Int      @id @default(autoincrement())
+  token     String   @unique(map: "RefreshToken_token_key") @db.VarChar(500)
+  userId    Int
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      user     @relation(fields: [userId], references: [id], onDelete: Cascade, map: "RefreshToken_userId_fkey")
+
+  @@index([userId], map: "RefreshToken_userId_fkey")
+}
+
+model ticket {
+  id          Int           @id @default(autoincrement())
+  eventId     Int
+  buyerName   String
+  buyerEmail  String
+  qrPayload   String        @unique(map: "Ticket_qrPayload_key")
+  status      ticket_status @default(UNUSED)
+  purchasedAt DateTime      @default(now())
+  scannedAt   DateTime?
+  event       event         @relation(fields: [eventId], references: [id], map: "Ticket_eventId_fkey")
+
+  @@index([eventId], map: "Ticket_eventId_fkey")
+}
+
+model user {
+  id                             Int               @id @default(autoincrement())
+  name                           String
+  email                          String            @unique(map: "User_email_key")
+  password                       String
+  role                           user_role         @default(TENANT)
+  status                         user_status       @default(ACTIVE)
+  organizerStatus                organizer_status  @default(PENDING)
+  createdAt                      DateTime          @default(now())
+  updatedAt                      DateTime          @updatedAt
+  isVerified                     Boolean           @default(false)
+  event_event_organizerIdTouser  event[]           @relation("event_organizerIdTouser")
+  event_event_reviewedByIdTouser event[]           @relation("event_reviewedByIdTouser")
+  refreshtoken                   refreshtoken[]
+}
+
+enum promocode_discountType {
+  PERCENTAGE
+  FIXED
+}
+
+enum user_role {
+  ADMIN
+  ORGANIZER
+  TENANT
+}
+
+enum ticket_status {
+  UNUSED
+  USED
+}
+
+enum user_status {
+  ACTIVE
+  SUSPENDED
+}
+
+enum organizer_status {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum event_status {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum event_serviceFeeType {
+  BUYER
+  ORGANIZER
+}
