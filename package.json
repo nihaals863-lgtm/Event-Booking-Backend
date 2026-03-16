@@ -4,7 +4,7 @@
   "description": "Event Ticket Platform Backend",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "prisma generate && node src/server.js",
     "dev": "node --watch src/server.js",
     "db:push": "prisma db push",
     "db:generate": "prisma generate"
@@ -16,9 +16,9 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.3",
-    "mysql2": "^3.12.0"
+    "mysql2": "^3.12.0",
+    "prisma": "^6.4.1"
   },
   "devDependencies": {
-    "prisma": "^6.4.1"
   }
 }
