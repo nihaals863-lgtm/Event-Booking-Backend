@@ -7,12 +7,19 @@ const app = express();
 // Middlewares
 app.use(cors({
     origin: (origin, callback) => {
-        // Allow requests with no origin (mobile apps, curl, Postman)
         if (!origin) return callback(null, true);
-        // Allow localhost dev and any ngrok tunnel
-        const allowed = /localhost|127\.0\.0\.1|192\.168\.|ngrok/;
-        if (allowed.test(origin)) return callback(null, true);
-        callback(new Error(`CORS blocked: ${origin}`));
+        
+        const isAllowed = origin.includes('localhost') || 
+                          origin.includes('127.0.0.1') || 
+                          origin.includes('ngrok') || 
+                          origin.includes('netlify.app');
+        
+        if (isAllowed) {
+            callback(null, true);
+        } else {
+            console.warn(`[CORS] Rejected origin: ${origin}`);
+            callback(null, false);
+        }
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
