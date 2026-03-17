@@ -208,4 +208,21 @@ router.get('/stats', async (req, res) => {
     }
 });
 
+/**
+ * @route GET /api/public/settings
+ * @desc  Get platform settings (currency) - public, no auth required
+ */
+router.get('/settings', async (req, res) => {
+    try {
+        let settings = await prisma.platformsettings.findFirst();
+        if (!settings) {
+            settings = await prisma.platformsettings.create({ data: { currency: 'AUD' } });
+        }
+        res.json(settings);
+    } catch (error) {
+        console.error('Get public settings error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 module.exports = router;

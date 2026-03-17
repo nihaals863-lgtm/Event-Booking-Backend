@@ -171,3 +171,8 @@ enum event_serviceFeeType {
   BUYER
   ORGANIZER
 }
+
+model platformsettings {
+  id       Int    @id @default(autoincrement())
+  currency String @default("AUD")
+}

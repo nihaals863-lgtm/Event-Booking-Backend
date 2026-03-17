@@ -484,4 +484,48 @@ router.patch('/organizers/:id/reject', requireAuth, requireRole(['ADMIN']), asyn
     }
 });
 
+// ─── Platform Settings (Currency) ───────────────────────────────────────────
+
+/**
+ * @route GET /api/admin/settings
+ * @desc  Get platform settings (currency)
+ */
+router.get('/settings', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+    try {
+        let settings = await prisma.platformsettings.findFirst();
+        if (!settings) {
+            // Seed default row if none exists
+            settings = await prisma.platformsettings.create({ data: { currency: 'AUD' } });
+        }
+        res.json(settings);
+    } catch (error) {
+        console.error('Get settings error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * @route PATCH /api/admin/settings
+ * @desc  Update platform settings (currency)
+ */
+router.patch('/settings', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+    const { currency } = req.body;
+    const SUPPORTED = ['AUD', 'USD', 'INR', 'EUR', 'GBP', 'SGD', 'NZD', 'CAD'];
+    if (!SUPPORTED.includes(currency)) {
+        return res.status(400).json({ error: `Unsupported currency. Allowed: ${SUPPORTED.join(', ')}` });
+    }
+    try {
+        let settings = await prisma.platformsettings.findFirst();
+        if (!settings) {
+            settings = await prisma.platformsettings.create({ data: { currency } });
+        } else {
+            settings = await prisma.platformsettings.update({ where: { id: settings.id }, data: { currency } });
+        }
+        res.json({ message: 'Currency updated successfully', settings });
+    } catch (error) {
+        console.error('Update settings error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 module.exports = router;
