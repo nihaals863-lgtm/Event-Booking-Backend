@@ -13,7 +13,7 @@ router.post('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
         title, category, description, location, eventDate, ticketPrice,
         totalTickets, image, tags, highlights, promoCodes,
         isPublic, sellingFastThreshold, galleryImages, ticketReleases,
-		serviceFeeType, serviceFeeRate
+        serviceFeeType, serviceFeeRate, pricingType
     } = req.body;
 
     console.log('--- EVENT CREATION REQUEST ---');
@@ -35,10 +35,12 @@ router.post('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
             location,
             eventDate: new Date(eventDate),
             ticketPrice: parsedPrice,
+            ticketPriceCents: Math.round(parsedPrice * 100),
             totalTickets: parsedCapacity,
             image: image || null,
             organizerId: req.user.id,
             status: 'PENDING',
+            pricingType: pricingType || 'SINGLE',
             isPublic: isPublic !== undefined ? isPublic : true,
             sellingFastThreshold: sellingFastThreshold ? parseInt(sellingFastThreshold) : 20,
             serviceFeeType: serviceFeeType || 'BUYER',
@@ -60,13 +62,25 @@ router.post('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
                     displayOrder: index
                 }))
             } : undefined,
-            ticketrelease: (ticketReleases && ticketReleases.length > 0) ? {
-                create: ticketReleases.filter(tr => parseInt(tr.quantity) > 0).map(tr => ({
-                    name: tr.name,
-                    price: parseFloat(tr.price) || 0,
-                    quantity: parseInt(tr.quantity) || 0,
-                    releaseDate: tr.releaseDate ? new Date(tr.releaseDate) : null
-                }))
+            ticketrelease: (pricingType === 'MULTI' && ticketReleases && ticketReleases.length > 0) ? {
+                create: (() => {
+                    let foundActive = false;
+                    return ticketReleases.filter(tr => parseInt(tr.quantity) > 0).map(tr => {
+                        const trIsActive = tr.isActive ?? false;
+                        const finalActive = trIsActive && !foundActive;
+                        if (finalActive) foundActive = true;
+
+                        return {
+                            name: tr.name,
+                            price: parseFloat(tr.price) || 0,
+                            priceCents: Math.round((parseFloat(tr.price) || 0) * 100),
+                            quantity: parseInt(tr.quantity) || 0,
+                            releaseDate: tr.releaseDate ? new Date(tr.releaseDate) : null,
+                            endDate: tr.endDate ? new Date(tr.endDate) : null,
+                            isActive: finalActive
+                        };
+                    });
+                })()
             } : undefined,
             updatedAt: new Date()
         };
@@ -82,7 +96,7 @@ router.post('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
         // Log detailed error for debugging
         if (error.code) console.error('Prisma Error Code:', error.code);
         if (error.meta) console.error('Prisma Error Meta:', error.meta);
-        
+
         if (error.name === 'PrismaClientKnownRequestError') {
             return res.status(400).json({ error: 'Database constraint violation. Please check your data.' });
         }
@@ -161,7 +175,7 @@ router.patch('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), as
         title, category, description, location, eventDate, ticketPrice,
         totalTickets, image, tags, highlights, promoCodes,
         isPublic, sellingFastThreshold, galleryImages, ticketReleases,
-		serviceFeeType, serviceFeeRate
+        serviceFeeType, serviceFeeRate, pricingType
     } = req.body;
 
     try {
@@ -174,7 +188,12 @@ router.patch('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), as
             return res.status(403).json({ error: 'Not authorized to edit this event' });
         }
 
-        // Transactions to update linked entities
+        // GUARD: Prevent switching pricingType if tickets have been sold
+        if (pricingType && pricingType !== event.pricingType && event.ticketsSold > 0) {
+            return res.status(400).json({ error: 'Cannot change pricing type after tickets have been sold.' });
+        }
+
+        // 1. Update basic event data
         const updatedEvent = await prisma.event.update({
             where: { id: parseInt(id) },
             data: {
@@ -184,6 +203,7 @@ router.patch('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), as
                 location,
                 eventDate: eventDate ? new Date(eventDate) : undefined,
                 ticketPrice: ticketPrice ? parseFloat(ticketPrice) : undefined,
+                ticketPriceCents: ticketPrice ? Math.round(parseFloat(ticketPrice) * 100) : undefined,
                 totalTickets: totalTickets ? parseInt(totalTickets) : undefined,
                 image,
                 isPublic: isPublic !== undefined ? isPublic : undefined,
@@ -192,42 +212,305 @@ router.patch('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), as
                 serviceFeeRate: serviceFeeRate !== undefined ? parseFloat(serviceFeeRate) : undefined,
                 tags: tags ? JSON.stringify(tags) : undefined,
                 highlights: highlights ? JSON.stringify(highlights) : undefined,
-                // Simple strategy: delete and recreate linked items if provided
-                promocode: promoCodes ? {
-                    deleteMany: {},
-                    create: promoCodes.map(pc => ({
-                        code: pc.code.toUpperCase(),
-                        discountType: (pc.discountType || pc.type).toUpperCase(),
-                        discountValue: parseFloat(pc.discountValue || pc.value),
-                        maxUsage: pc.maxUsage || (pc.limit ? parseInt(pc.limit) : 0),
-                        expiresAt: pc.expiresAt ? new Date(pc.expiresAt) : (pc.expiry ? new Date(pc.expiry) : null)
-                    }))
-                } : undefined,
-                eventimage: galleryImages ? {
-                    deleteMany: {},
-                    create: galleryImages.map((imgUrl, index) => ({
-                        imageUrl: imgUrl,
-                        displayOrder: index
-                    }))
-                } : undefined,
-                ticketrelease: ticketReleases ? {
-                    deleteMany: {},
-                    create: ticketReleases.filter(tr => parseInt(tr.quantity) > 0).map(tr => ({
-                        name: tr.name,
-                        price: parseFloat(tr.price) || 0,
-                        quantity: parseInt(tr.quantity) || 0,
-                        releaseDate: tr.releaseDate ? new Date(tr.releaseDate) : null
-                    }))
-                } : undefined,
+                pricingType: pricingType || undefined,
                 updatedAt: new Date(),
-                status: 'PENDING' // Reset to pending if major changes made
+                status: 'PENDING'
             }
         });
+
+        // 2. Handle linked entities (Promo Codes & Images)
+        if (promoCodes) {
+            await prisma.promocode.deleteMany({ where: { eventId: parseInt(id) } });
+            await prisma.promocode.createMany({
+                data: promoCodes.map(pc => ({
+                    eventId: parseInt(id),
+                    code: pc.code.toUpperCase(),
+                    discountType: (pc.discountType || pc.type).toUpperCase(),
+                    discountValue: parseFloat(pc.discountValue || pc.value),
+                    // Note: Discount logic stays same for now as we didn't add cents to promocode yet, 
+                    // but we could if needed later.
+                    maxUsage: pc.maxUsage || (pc.limit ? parseInt(pc.limit) : 0),
+                    expiresAt: pc.expiresAt ? new Date(pc.expiresAt) : (pc.expiry ? new Date(pc.expiry) : null)
+                }))
+            });
+        }
+
+        if (galleryImages) {
+            await prisma.eventimage.deleteMany({ where: { eventId: parseInt(id) } });
+            await prisma.eventimage.createMany({
+                data: galleryImages.map((imgUrl, index) => ({
+                    eventId: parseInt(id),
+                    imageUrl: imgUrl,
+                    displayOrder: index
+                }))
+            });
+        }
+
+        // 3. Handle Ticket Releases (MULTI Pricing)
+        if (pricingType === 'SINGLE' || (!pricingType && event.pricingType === 'SINGLE')) {
+            // Delete all releases if switching to SINGLE
+            await prisma.ticketrelease.deleteMany({ where: { eventId: parseInt(id) } });
+        } else if (ticketReleases) {
+            const existingReleases = await prisma.ticketrelease.findMany({ where: { eventId: parseInt(id) } });
+            const existingIds = existingReleases.map(r => r.id);
+            const providedIds = ticketReleases.filter(tr => tr.id).map(tr => parseInt(tr.id));
+
+            // Delete releases not in provided list (only if 0 sold)
+            const toDelete = existingIds.filter(eid => !providedIds.includes(eid));
+            for (const delId of toDelete) {
+                const soldCount = await prisma.ticket.count({ where: { ticketReleaseId: delId } });
+                if (soldCount === 0) {
+                    await prisma.ticketrelease.delete({ where: { id: delId } });
+                } else {
+                    // If tickets sold, just deactivate it instead of deleting
+                    await prisma.ticketrelease.update({ where: { id: delId }, data: { isActive: false } });
+                }
+            }
+
+            // Update or Create provided releases
+            let foundActive = false;
+            for (const tr of ticketReleases) {
+                // Enforce single active tier: only the first one encountered as active stays active
+                const trIsActive = tr.isActive ?? false;
+                const finalActive = trIsActive && !foundActive;
+                if (finalActive) foundActive = true;
+
+                const releaseData = {
+                    name: tr.name,
+                    price: parseFloat(tr.price) || 0,
+                    priceCents: Math.round((parseFloat(tr.price) || 0) * 100),
+                    quantity: parseInt(tr.quantity) || 0,
+                    releaseDate: tr.releaseDate ? new Date(tr.releaseDate) : null,
+                    endDate: tr.endDate ? new Date(tr.endDate) : null,
+                    isActive: finalActive
+                };
+
+                if (tr.id) {
+                    await prisma.ticketrelease.update({
+                        where: { id: parseInt(tr.id) },
+                        data: releaseData
+                    });
+                } else if (parseInt(tr.quantity) > 0) {
+                    await prisma.ticketrelease.create({
+                        data: {
+                            ...releaseData,
+                            eventId: parseInt(id)
+                        }
+                    });
+                }
+            }
+        }
 
         res.json(updatedEvent);
     } catch (error) {
         console.error('Error updating event:', error);
         res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * @route PATCH /api/organizer/releases/:id/toggle
+ * @desc  Activate or deactivate a ticket release (single-active enforcement)
+ */
+router.patch('/releases/:id/toggle', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+    const releaseId = parseInt(req.params.id);
+    try {
+        const release = await prisma.ticketrelease.findUnique({
+            where: { id: releaseId },
+            include: { event: true }
+        });
+
+        if (!release) return res.status(404).json({ error: 'Ticket release not found' });
+        if (release.event.organizerId !== req.user.id && req.user.role !== 'ADMIN') {
+            return res.status(403).json({ error: 'Not authorized' });
+        }
+
+        const newActiveState = !release.isActive;
+
+        // Atomic: if activating, deactivate all other releases for this event first
+        await prisma.$transaction(async (tx) => {
+            if (newActiveState) {
+                // Deactivate all sibling releases
+                await tx.ticketrelease.updateMany({
+                    where: { eventId: release.eventId, id: { not: releaseId } },
+                    data: { isActive: false }
+                });
+            }
+            // Toggle this one
+            await tx.ticketrelease.update({
+                where: { id: releaseId },
+                data: { isActive: newActiveState }
+            });
+        });
+
+        // Return fresh event data
+        const updatedEvent = await prisma.event.findUnique({
+            where: { id: release.eventId },
+            include: { ticketrelease: true }
+        });
+
+        res.json({ 
+            message: `Release ${newActiveState ? 'activated' : 'deactivated'} successfully`,
+            ticketReleases: updatedEvent.ticketrelease
+        });
+    } catch (error) {
+        console.error('Error toggling release:', error);
+        res.status(500).json({ error: 'Failed to update release status' });
+    }
+});
+
+/**
+ * @route PATCH /api/organizer/releases/:id
+ * @desc  Edit a ticket release (name, qty, dates — price locked if sold > 0)
+ */
+router.patch('/releases/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+    const releaseId = parseInt(req.params.id);
+    const { name, price, quantity, releaseDate, endDate } = req.body;
+    try {
+        const release = await prisma.ticketrelease.findUnique({
+            where: { id: releaseId },
+            include: { event: true }
+        });
+
+        if (!release) return res.status(404).json({ error: 'Ticket release not found' });
+        if (release.event.organizerId !== req.user.id && req.user.role !== 'ADMIN') {
+            return res.status(403).json({ error: 'Not authorized' });
+        }
+        if (quantity !== undefined && parseInt(quantity) < release.sold) {
+            return res.status(400).json({ error: `Cannot reduce quantity below sold count (${release.sold})` });
+        }
+
+        const updateData = {
+            name: name || release.name,
+            quantity: quantity !== undefined ? parseInt(quantity) : release.quantity,
+            releaseDate: releaseDate !== undefined ? (releaseDate ? new Date(releaseDate) : null) : release.releaseDate,
+            endDate: endDate !== undefined ? (endDate ? new Date(endDate) : null) : release.endDate
+        };
+
+        // Price is locked after tickets are sold
+        if (price !== undefined) {
+            if (release.sold > 0) {
+                return res.status(400).json({ error: 'Cannot change price after tickets have been sold for this tier' });
+            }
+            updateData.price = parseFloat(price);
+            updateData.priceCents = Math.round(parseFloat(price) * 100);
+        }
+
+        const updated = await prisma.ticketrelease.update({
+            where: { id: releaseId },
+            data: updateData
+        });
+
+        // Recalculate event totalTickets from all releases
+        const allReleases = await prisma.ticketrelease.findMany({ where: { eventId: release.eventId } });
+        const newTotal = allReleases.reduce((sum, r) => sum + (r.id === releaseId ? parseInt(quantity || release.quantity) : r.quantity), 0);
+        await prisma.event.update({
+            where: { id: release.eventId },
+            data: { totalTickets: newTotal }
+        });
+
+        res.json(updated);
+    } catch (error) {
+        console.error('Error editing release:', error);
+        res.status(500).json({ error: 'Failed to update release' });
+    }
+});
+
+/**
+ * @route POST /api/organizer/events/:id/releases
+ * @desc  Add a new ticket release to an existing MULTI event
+ */
+router.post('/events/:id/releases', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+    const eventId = parseInt(req.params.id);
+    const { name, price, quantity, releaseDate, endDate, activateImmediately } = req.body;
+    try {
+        const event = await prisma.event.findUnique({
+            where: { id: eventId },
+            include: { ticketrelease: true }
+        });
+
+        if (!event) return res.status(404).json({ error: 'Event not found' });
+        if (event.organizerId !== req.user.id && req.user.role !== 'ADMIN') {
+            return res.status(403).json({ error: 'Not authorized' });
+        }
+        if (event.pricingType !== 'MULTI') {
+            return res.status(400).json({ error: 'Cannot add releases to a SINGLE pricing event' });
+        }
+        if (!name || price === undefined || !quantity) {
+            return res.status(400).json({ error: 'Name, price, and quantity are required' });
+        }
+
+        const newRelease = await prisma.$transaction(async (tx) => {
+            // If activating immediately, deactivate all existing releases first
+            if (activateImmediately) {
+                await tx.ticketrelease.updateMany({
+                    where: { eventId },
+                    data: { isActive: false }
+                });
+            }
+
+            const created = await tx.ticketrelease.create({
+                data: {
+                    eventId,
+                    name,
+                    price: parseFloat(price),
+                    priceCents: Math.round(parseFloat(price) * 100),
+                    quantity: parseInt(quantity),
+                    sold: 0,
+                    isActive: activateImmediately ? true : false,
+                    releaseDate: releaseDate ? new Date(releaseDate) : null,
+                    endDate: endDate ? new Date(endDate) : null
+                }
+            });
+
+            // Recalculate event totalTickets
+            const allReleases = await tx.ticketrelease.findMany({ where: { eventId } });
+            const newTotal = allReleases.reduce((sum, r) => sum + r.quantity, 0);
+            await tx.event.update({ where: { id: eventId }, data: { totalTickets: newTotal } });
+
+            return created;
+        });
+
+        res.status(201).json(newRelease);
+    } catch (error) {
+        console.error('Error adding release:', error);
+        res.status(500).json({ error: 'Failed to add ticket release' });
+    }
+});
+
+/**
+ * @route DELETE /api/organizer/releases/:id
+ * @desc  Delete a ticket release (blocked if any tickets sold)
+ */
+router.delete('/releases/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+    const releaseId = parseInt(req.params.id);
+    try {
+        const release = await prisma.ticketrelease.findUnique({
+            where: { id: releaseId },
+            include: { event: true }
+        });
+
+        if (!release) return res.status(404).json({ error: 'Ticket release not found' });
+        if (release.event.organizerId !== req.user.id && req.user.role !== 'ADMIN') {
+            return res.status(403).json({ error: 'Not authorized' });
+        }
+        if (release.sold > 0) {
+            return res.status(400).json({ 
+                error: `Cannot delete this tier — ${release.sold} ticket(s) have already been sold. Deactivate it instead.` 
+            });
+        }
+
+        await prisma.ticketrelease.delete({ where: { id: releaseId } });
+
+        // Recalculate event totalTickets
+        const remaining = await prisma.ticketrelease.findMany({ where: { eventId: release.eventId } });
+        const newTotal = remaining.reduce((sum, r) => sum + r.quantity, 0);
+        await prisma.event.update({ where: { id: release.eventId }, data: { totalTickets: newTotal } });
+
+        res.json({ message: 'Ticket release deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting release:', error);
+        res.status(500).json({ error: 'Failed to delete release' });
     }
 });
 
@@ -254,7 +537,7 @@ router.get('/reports', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
 
             acc.totalGross += gross;
             acc.totalFees += platformFee;
-            
+
             // If organizer covers fee, net is gross - fee. If buyer covers, net is full ticket price.
             const net = event.serviceFeeType === 'ORGANIZER' ? (gross - platformFee) : gross;
             acc.totalNet += net;
@@ -472,6 +755,11 @@ router.get('/events/:id/attendees', requireAuth, requireRole(['ORGANIZER', 'ADMI
 
         const attendees = await prisma.ticket.findMany({
             where: { eventId: parseInt(id) },
+            include: {
+                ticketrelease: {
+                    select: { name: true, price: true }
+                }
+            },
             orderBy: { purchasedAt: 'desc' }
         });
 
@@ -479,6 +767,70 @@ router.get('/events/:id/attendees', requireAuth, requireRole(['ORGANIZER', 'ADMI
     } catch (error) {
         console.error('Error fetching attendees:', error);
         res.status(500).json({ error: 'Failed to load attendee list. Please try again.' });
+    }
+});
+
+/**
+ * @route PATCH /api/organizer/releases/:id/toggle
+ * @desc  Toggle activation of a ticket release
+ */
+router.patch('/releases/:id/toggle', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+    const { id } = req.params;
+    try {
+        const release = await prisma.ticketrelease.findUnique({
+            where: { id: parseInt(id) },
+            include: { event: true }
+        });
+
+        if (!release) return res.status(404).json({ error: 'Ticket release not found' });
+        if (release.event.organizerId !== req.user.id && req.user.role !== 'ADMIN') {
+            return res.status(403).json({ error: 'Not authorized' });
+        }
+
+        const newStatus = !release.isActive;
+
+        // If activating, deactivate all others first
+        if (newStatus) {
+            await prisma.ticketrelease.updateMany({
+                where: { eventId: release.eventId, id: { not: parseInt(id) } },
+                data: { isActive: false }
+            });
+        }
+
+        const updatedRelease = await prisma.ticketrelease.update({
+            where: { id: parseInt(id) },
+            data: { isActive: newStatus }
+        });
+
+        // Recalculate event-level totals and price if pricingType is MULTI
+        if (release.event.pricingType === 'MULTI') {
+            const allReleases = await prisma.ticketrelease.findMany({
+                where: { eventId: release.eventId, isActive: true }
+            });
+
+            let totalCapacity = 0;
+            let minPrice = null;
+
+            allReleases.forEach(r => {
+                totalCapacity += r.quantity;
+                if (minPrice === null || r.price < minPrice) {
+                    minPrice = r.price;
+                }
+            });
+
+            await prisma.event.update({
+                where: { id: release.eventId },
+                data: {
+                    totalTickets: totalCapacity,
+                    ticketPrice: minPrice || 0
+                }
+            });
+        }
+
+        res.json(updatedRelease);
+    } catch (error) {
+        console.error('Error toggling release status:', error);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 

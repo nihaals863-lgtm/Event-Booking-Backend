@@ -2,6 +2,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const prisma = require('../../config/db');
+const emailService = require('../../services/emailService');
 
 const router = express.Router();
 
@@ -10,7 +11,7 @@ const router = express.Router();
  * @desc  Login user and return JWT
  */
 router.post('/login', async (req, res) => {
-    const { email, password } = req.body;
+    const { email, password, role: requestedRole } = req.body;
 
     if (!email || !password) {
         return res.status(400).json({ error: 'Email and password are required' });
@@ -30,6 +31,11 @@ router.post('/login', async (req, res) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
+        // --- Admin Role Gate ---
+        if (requestedRole === 'admin' && user.role !== 'ADMIN') {
+            return res.status(403).json({ error: 'Access denied. Administrator privileges required.' });
+        }
+
         // Self-healing: Ensure demo accounts always have the correct roles
         if (email === 'admin@eventplatform.com' && user.role !== 'ADMIN') {
             await prisma.user.update({ where: { email }, data: { role: 'ADMIN' } });
@@ -38,7 +44,7 @@ router.post('/login', async (req, res) => {
             const updates = {};
             if (user.role !== 'ORGANIZER') updates.role = 'ORGANIZER';
             if (user.organizerStatus !== 'APPROVED') updates.organizerStatus = 'APPROVED';
-            
+
             if (Object.keys(updates).length > 0) {
                 await prisma.user.update({ where: { email }, data: updates });
                 Object.assign(user, updates);
@@ -49,17 +55,19 @@ router.post('/login', async (req, res) => {
             return res.status(403).json({ error: 'Your account has been suspended. Please contact support.' });
         }
 
+        /* 
         // Organizer Approval Gate: Block pending/rejected organizers from logging in
         if (user.role === 'ORGANIZER' && user.organizerStatus !== 'APPROVED') {
             if (user.organizerStatus === 'REJECTED') {
-                return res.status(403).json({ 
-                    error: 'Your organizer account application has been rejected. Please contact support.' 
+                return res.status(403).json({
+                    error: 'Your organizer account application has been rejected. Please contact support.'
                 });
             }
-            return res.status(403).json({ 
-                error: 'Your organizer account is awaiting admin approval. Please wait until admin approves your request.' 
+            return res.status(403).json({
+                error: 'Your organizer account is awaiting admin approval. Please wait until admin approves your request.'
             });
         }
+        */
 
         const token = jwt.sign(
             { id: user.id, role: user.role, email: user.email, status: user.status, organizerStatus: user.organizerStatus },
@@ -106,22 +114,55 @@ router.post('/register', async (req, res) => {
 
         const hashedPassword = await bcrypt.hash(password, 10);
         console.log('Attempting to create user with data:', { name, email, role: 'ORGANIZER' });
-        
+
         const user = await prisma.user.create({
             data: {
                 name,
                 email,
                 password: hashedPassword,
-                role: 'ORGANIZER', 
+                role: 'ORGANIZER',
                 organizerStatus: 'PENDING'
             }
         });
 
         console.log('User created successfully:', user.id);
 
+        // Notify Admin of new registration (Non-blocking Fire-and-Forget)
+        emailService.sendAdminNewOrganizerAlert({ 
+            name: user.name, 
+            email: user.email 
+        });
+
+        /* 
         res.status(202).json({
             pending: true,
             message: 'Your organizer account is pending admin approval. You will be able to login after approval.'
+        });
+        */
+
+        /* 
+        // Immediate login after registration (Approval flow disabled)
+        const token = jwt.sign(
+            { id: user.id, role: user.role, email: user.email, status: user.status, organizerStatus: user.organizerStatus },
+            process.env.JWT_SECRET || 'supersafe_jwt_secret_for_local_development',
+            { expiresIn: '1d' }
+        );
+
+        res.status(201).json({
+            user: {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                role: user.role,
+                status: user.status,
+                organizerStatus: user.organizerStatus
+            },
+            token
+        });
+        */
+
+        res.status(201).json({
+            message: 'Registration successful! Please log in to your account.'
         });
     } catch (error) {
         console.error('Registration error details:', {
@@ -133,6 +174,15 @@ router.post('/register', async (req, res) => {
         res.status(500).json({ error: 'Internal server error: ' + error.message });
     }
 });
+
+/**
+ * Helper to mask sensitive bank details
+ */
+const maskValue = (val) => {
+    if (!val) return null;
+    if (val.length <= 4) return 'XXXX';
+    return 'XXXXXX' + val.slice(-4);
+};
 
 /**
  * Middleware to verify JWT
@@ -152,30 +202,126 @@ const authenticate = (req, res, next) => {
 
 /**
  * @route PUT /api/auth/profile
- * @desc  Update user profile (name, email)
+ * @desc  Update user profile (name, email, business/bank details)
  */
 router.put('/profile', authenticate, async (req, res) => {
-    const { name, email } = req.body;
+    const { 
+        name, email, 
+        businessName, abn, 
+        bankAccountName, bsb, accountNumber,
+        currentPayoutDetailsUpdatedAt // For concurrency check
+    } = req.body;
     const userId = req.user.id;
 
     try {
-        // Check if email is already taken by another user
-        if (email) {
-            const existing = await prisma.user.findUnique({ where: { email } });
-            if (existing && existing.id !== userId) {
-                return res.status(400).json({ error: 'Email already in use' });
+        await prisma.$transaction(async (tx) => {
+            const user = await tx.user.findUnique({ where: { id: userId } });
+            
+            // 1. Concurrency Check
+            if (currentPayoutDetailsUpdatedAt && user.payoutDetailsUpdatedAt) {
+                const incomingDate = new Date(currentPayoutDetailsUpdatedAt).getTime();
+                const actualDate = new Date(user.payoutDetailsUpdatedAt).getTime();
+                if (incomingDate !== actualDate) {
+                    throw new Error('CONCURRENCY_ERROR');
+                }
             }
-        }
 
-        const updated = await prisma.user.update({
-            where: { id: userId },
-            data: { name, email },
-            select: { id: true, name: true, email: true, role: true, status: true }
+            // 2. Email uniqueness check
+            if (email && email !== user.email) {
+                const existing = await tx.user.findUnique({ where: { email } });
+                if (existing) throw new Error('EMAIL_TAKEN');
+            }
+
+            const updates = {};
+            if (name !== undefined && name !== "") updates.name = name;
+            if (email !== undefined && email !== "") updates.email = email;
+
+            // 3. Organizer Specific Fields with Soft/Hard Validation
+            if (user.role === 'ORGANIZER') {
+                const trimmedBsb = bsb?.trim();
+                const trimmedAcc = accountNumber?.trim();
+
+                // Atomic Bank Validation: Both or None
+                if ((trimmedBsb && !trimmedAcc) || (!trimmedBsb && trimmedAcc)) {
+                    throw new Error('INVALID_BANK_COMBO');
+                }
+
+                if (trimmedBsb) {
+                    if (!/^\d{6}$/.test(trimmedBsb)) throw new Error('INVALID_BSB');
+                    if (trimmedBsb !== user.bsb) {
+                        updates.bsb = trimmedBsb;
+                        updates.payoutDetailsUpdatedAt = new Date();
+                    }
+                }
+
+                if (trimmedAcc) {
+                    if (!/^\d{6,}$/.test(trimmedAcc)) throw new Error('INVALID_ACCOUNT');
+                    if (trimmedAcc !== user.accountNumber) {
+                        updates.accountNumber = trimmedAcc;
+                        updates.payoutDetailsUpdatedAt = new Date();
+                    }
+                }
+
+                if (businessName !== undefined && businessName !== "" && businessName !== user.businessName) {
+                    updates.businessName = businessName;
+                }
+
+                if (abn !== undefined && abn !== "" && abn !== user.abn) {
+                    updates.abn = abn;
+                    // Soft validation check could be added here for warnings
+                }
+
+                if (bankAccountName !== undefined && bankAccountName !== "" && bankAccountName !== user.bankAccountName) {
+                    updates.bankAccountName = bankAccountName;
+                }
+            }
+
+            // Only update if there are changes (No-Op Guard)
+            if (Object.keys(updates).length > 0) {
+                await tx.user.update({
+                    where: { id: userId },
+                    data: updates
+                });
+            }
         });
 
-        res.json({ user: updated });
+        // 4. Fetch and Return (Masked)
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { 
+                id: true, name: true, email: true, role: true, status: true, 
+                businessName: true, abn: true, bankAccountName: true,
+                bsb: true, accountNumber: true, payoutDetailsUpdatedAt: true,
+                isVerified: true
+            }
+        });
+
+        res.json({ 
+            user: {
+                ...user,
+                bsb: user.bsb ? "XXXXXX" : null,
+                accountNumber: maskValue(user.accountNumber)
+            } 
+        });
+
     } catch (error) {
-        console.error('Profile update error:', error);
+        if (error.message === 'CONCURRENCY_ERROR') {
+            return res.status(409).json({ error: 'Your payout details were updated in another session. Please refresh and try again.' });
+        }
+        if (error.message === 'EMAIL_TAKEN') {
+            return res.status(400).json({ error: 'Email already in use' });
+        }
+        if (error.message === 'INVALID_BANK_COMBO') {
+            return res.status(400).json({ error: 'Both BSB and Account Number are required together' });
+        }
+        if (error.message === 'INVALID_BSB') {
+            return res.status(400).json({ error: 'Invalid BSB: Must be exactly 6 digits' });
+        }
+        if (error.message === 'INVALID_ACCOUNT') {
+            return res.status(400).json({ error: 'Invalid account number: Numeric and min 6 digits required' });
+        }
+
+        console.error('Profile update error:', error.message); // Scored: No sensitive data/body
         res.status(500).json({ error: 'Internal server error' });
     }
 });

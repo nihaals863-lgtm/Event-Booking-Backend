@@ -25,6 +25,11 @@ app.use(cors({
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning']
 }));
+// Stripe Webhook (MUST be before express.json() for raw body signature check)
+app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+    require('./modules/payments/stripe.webhook').handleWebhook(req, res);
+});
+
 app.use(express.json());
 
 // Request Logger
@@ -49,5 +54,6 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/organizer', organizerRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/tickets', tenantRoutes);
+app.use('/api/payments', require('./modules/payments/payments.routes'));
 
 module.exports = app;

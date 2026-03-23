@@ -19,6 +19,13 @@ router.get('/events', async (req, res) => {
                     select: {
                         name: true
                     }
+                },
+                ticketrelease: {
+                    where: { isActive: true },
+                    orderBy: [
+                        { releaseDate: 'asc' },
+                        { price: 'asc' }
+                    ]
                 }
             },
             orderBy: {
@@ -26,11 +33,71 @@ router.get('/events', async (req, res) => {
             }
         });
 
-        // Map response for frontend
-        const mappedEvents = events.map(e => ({
-            ...e,
-            organizer: e.user_event_organizerIdTouser
-        }));
+        const now = new Date();
+        const mappedEvents = events
+            .filter(e => {
+                if (e.pricingType === 'MULTI') {
+                    // Only show events that have at least one potentially active tier
+                    return e.ticketrelease.some(tr => tr.isActive && (tr.sold < tr.quantity));
+                }
+                return true;
+            })
+            .map(e => {
+                const releasesWithStatus = (e.ticketrelease || []).map(tr => {
+                    let status = 'INACTIVE';
+                    if (tr.isActive) {
+                        if (tr.sold >= tr.quantity) status = 'SOLD_OUT';
+                        else if (tr.releaseDate && now < new Date(tr.releaseDate)) status = 'COMING_SOON';
+                        else if (tr.endDate && now > new Date(tr.endDate)) status = 'EXPIRED';
+                        else status = 'ACTIVE';
+                    }
+                    return { ...tr, status };
+                });
+
+                const activeReleases = releasesWithStatus.filter(r => r.status === 'ACTIVE');
+                let minPrice = e.ticketPrice;
+                let maxPrice = e.ticketPrice;
+                let minPriceCents = e.ticketPriceCents;
+                let maxPriceCents = e.ticketPriceCents;
+
+                if (e.pricingType === 'MULTI' && activeReleases.length > 0) {
+                    const prices = activeReleases.map(r => r.price);
+                    const pricesCents = activeReleases.map(r => r.priceCents);
+                    minPrice = Math.min(...prices);
+                    maxPrice = Math.max(...prices);
+                    minPriceCents = Math.min(...pricesCents);
+                    maxPriceCents = Math.max(...pricesCents);
+                } else if (e.pricingType === 'MULTI' && releasesWithStatus.length > 0) {
+                    // Fallback to all active (but maybe sold out/expired) for price range
+                    const allActive = releasesWithStatus.filter(r => r.isActive);
+                    if (allActive.length > 0) {
+                        minPrice = Math.min(...allActive.map(r => r.price));
+                        maxPrice = Math.max(...allActive.map(r => r.price));
+                        minPriceCents = Math.min(...allActive.map(r => r.priceCents));
+                        maxPriceCents = Math.max(...allActive.map(r => r.priceCents));
+                    }
+                }
+
+                // For MULTI events: compute accurate sold/total from actual release data
+                let accurateTicketsSold = e.ticketsSold || 0;
+                let accurateTotalTickets = e.totalTickets || 0;
+                if (e.pricingType === 'MULTI' && releasesWithStatus.length > 0) {
+                    accurateTicketsSold = releasesWithStatus.reduce((sum, r) => sum + (r.sold || 0), 0);
+                    accurateTotalTickets = releasesWithStatus.reduce((sum, r) => sum + (r.quantity || 0), 0);
+                }
+
+                return {
+                    ...e,
+                    ticketsSold: accurateTicketsSold,
+                    totalTickets: accurateTotalTickets,
+                    ticketrelease: releasesWithStatus,
+                    organizer: e.user_event_organizerIdTouser,
+                    minPrice,
+                    maxPrice,
+                    minPriceCents,
+                    maxPriceCents
+                };
+            });
 
         res.json(mappedEvents);
     } catch (error) {
@@ -67,6 +134,12 @@ router.get('/events/:id', async (req, res) => {
                     orderBy: {
                         orderIndex: 'asc'
                     }
+                },
+                ticketrelease: {
+                    orderBy: [
+                        { releaseDate: 'asc' },
+                        { price: 'asc' }
+                    ]
                 }
             }
         });
@@ -89,14 +162,52 @@ router.get('/events/:id', async (req, res) => {
             return res.status(404).json({ error: 'This is a private event. You need a direct link to access it.' });
         }
 
-        res.json({
+        const now = new Date();
+        const releasesWithStatus = (event.ticketrelease || []).map(tr => {
+            let status = 'INACTIVE';
+            if (tr.isActive) {
+                if (tr.sold >= tr.quantity) status = 'SOLD_OUT';
+                else if (tr.releaseDate && now < new Date(tr.releaseDate)) status = 'COMING_SOON';
+                else if (tr.endDate && now > new Date(tr.endDate)) status = 'EXPIRED';
+                else status = 'ACTIVE';
+            }
+            return { ...tr, status };
+        });
+
+        const eventData = {
             ...event,
+            ticketReleases: releasesWithStatus,
             tags: event.tags ? (typeof event.tags === 'string' ? JSON.parse(event.tags) : event.tags) : [],
             highlights: event.highlights ? (typeof event.highlights === 'string' ? JSON.parse(event.highlights) : event.highlights) : [],
             organizer: event.user_event_organizerIdTouser,
             galleryImages: event.eventimage,
             schedule: event.eventschedule
-        });
+        };
+
+        // Calculate price range for details based on current availability
+        if (event.pricingType === 'MULTI') {
+            const activeReleases = releasesWithStatus.filter(r => r.status === 'ACTIVE');
+            if (activeReleases.length > 0) {
+                const prices = activeReleases.map(r => r.price);
+                eventData.minPrice = Math.min(...prices);
+                eventData.maxPrice = Math.max(...prices);
+            } else {
+                const allActive = releasesWithStatus.filter(r => r.isActive);
+                if (allActive.length > 0) {
+                    const prices = allActive.map(r => r.price);
+                    eventData.minPrice = Math.min(...prices);
+                    eventData.maxPrice = Math.max(...prices);
+                }
+            }
+
+            // Accurate sold/total from release sums (more reliable than event-level counter)
+            if (releasesWithStatus.length > 0) {
+                eventData.ticketsSold = releasesWithStatus.reduce((sum, r) => sum + (r.sold || 0), 0);
+                eventData.totalTickets = releasesWithStatus.reduce((sum, r) => sum + (r.quantity || 0), 0);
+            }
+        }
+
+        res.json(eventData);
     } catch (error) {
         console.error('Error fetching event details:', error);
         res.status(500).json({ error: 'Internal server error' });
@@ -117,6 +228,7 @@ router.get('/tickets/:id', async (req, res) => {
         const ticket = await prisma.ticket.findUnique({
             where: { id: ticketId },
             include: {
+                ticketrelease: true,
                 event: {
                     select: {
                         title: true,
@@ -139,6 +251,84 @@ router.get('/tickets/:id', async (req, res) => {
         res.json(ticket);
     } catch (error) {
         console.error('Error fetching ticket:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * @route GET /api/public/orders/:orderId/tickets
+ * @desc  Fetch all tickets associated with a Purchase Order
+ */
+router.get('/orders/:orderId/tickets', async (req, res) => {
+    try {
+        const { orderId } = req.params;
+
+        let tickets = await prisma.ticket.findMany({
+            where: { purchaseOrderId: orderId },
+            include: {
+                ticketrelease: true,
+                event: {
+                    select: {
+                        title: true,
+                        location: true,
+                        eventDate: true,
+                        image: true,
+                        isPublic: true,
+                        user_event_organizerIdTouser: {
+                            select: {
+                                name: true,
+                                email: true
+                            }
+                        }
+                    }
+                }
+            },
+            orderBy: { id: 'asc' }
+        });
+
+        // SELF-HEALING LOGIC: If no tickets found, check if order is stuck in PAYMENT_PENDING
+        if (!tickets || tickets.length === 0) {
+            const order = await prisma.purchaseorder.findUnique({
+                where: { id: orderId }
+            });
+
+            if (order && order.paymentStatus === 'PAYMENT_PENDING' && order.stripeSessionId) {
+                console.log(`[SELF_HEAL] Checking Stripe status for order: ${orderId}`);
+                const { confirmOrderPayment } = require('../payments/stripe.webhook');
+                const stripeService = require('../payments/stripe.service');
+
+                try {
+                    const session = await stripeService.getSession(order.stripeSessionId);
+                    if (session.payment_status === 'paid') {
+                        console.log(`[SELF_HEAL] Stripe confirmed 'paid'. Triggering manual recovery for ${orderId}`);
+                        const generatedTickets = await confirmOrderPayment(session);
+                        if (generatedTickets && generatedTickets.length > 0) {
+                            // Re-fetch with full includes for consistent UI data
+                            tickets = await prisma.ticket.findMany({
+                                where: { purchaseOrderId: orderId },
+                                include: {
+                                    ticketrelease: true,
+                                    event: { include: { user_event_organizerIdTouser: true } }
+                                },
+                                orderBy: { id: 'asc' }
+                            });
+                        }
+                    } else {
+                        console.log(`[SELF_HEAL] Stripe status is ${session.payment_status} for ${orderId}. Skipping recovery.`);
+                    }
+                } catch (stripeError) {
+                    console.error(`[SELF_HEAL_ERROR] Stripe verification failed for ${orderId}:`, stripeError.message);
+                }
+            }
+        }
+
+        if (!tickets || tickets.length === 0) {
+            return res.status(404).json({ error: 'No tickets found for this order. Payment may still be processing or was not completed.' });
+        }
+
+        res.json(tickets);
+    } catch (error) {
+        console.error('Error fetching order tickets:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });

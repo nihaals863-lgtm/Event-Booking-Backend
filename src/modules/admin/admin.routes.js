@@ -209,10 +209,13 @@ router.get('/dashboard', requireAuth, requireRole(['ADMIN']), async (req, res) =
             }
         });
 
+        const settings = await prisma.platformsettings.findFirst() || { platformFeeRate: 0.015 };
+        const feeRate = settings.platformFeeRate || 0.015;
+
         const totalRevenue = revStats.reduce((sum, ev) => sum + ((ev.ticketsSold || 0) * ev.ticketPrice), 0);
         const platformRevenue = revStats.reduce((sum, ev) => {
             const gross = (ev.ticketsSold || 0) * ev.ticketPrice;
-            const fee = gross * (ev.serviceFeeRate || 0.03);
+            const fee = gross * feeRate;
             return sum + fee;
         }, 0);
         const netRevenue = totalRevenue - platformRevenue;
@@ -270,10 +273,13 @@ router.get('/stats', requireAuth, requireRole(['ADMIN']), async (req, res) => {
             }
         });
 
+        const settings = await prisma.platformsettings.findFirst() || { platformFeeRate: 0.015 };
+        const feeRate = settings.platformFeeRate || 0.015;
+
         const totalRevenue = revStats.reduce((sum, ev) => sum + ((ev.ticketsSold || 0) * ev.ticketPrice), 0);
         const platformRevenue = revStats.reduce((sum, ev) => {
             const gross = (ev.ticketsSold || 0) * ev.ticketPrice;
-            const fee = gross * (ev.serviceFeeRate || 0.03);
+            const fee = gross * feeRate;
             return sum + fee;
         }, 0);
 
@@ -509,21 +515,248 @@ router.get('/settings', requireAuth, requireRole(['ADMIN']), async (req, res) =>
  * @desc  Update platform settings (currency)
  */
 router.patch('/settings', requireAuth, requireRole(['ADMIN']), async (req, res) => {
-    const { currency } = req.body;
-    const SUPPORTED = ['AUD', 'USD', 'INR', 'EUR', 'GBP', 'SGD', 'NZD', 'CAD'];
-    if (!SUPPORTED.includes(currency)) {
-        return res.status(400).json({ error: `Unsupported currency. Allowed: ${SUPPORTED.join(', ')}` });
+    const { currency, platformFeeRate, platformFeeFixed } = req.body;
+    
+    const updateData = {};
+    if (currency) {
+        const SUPPORTED = ['AUD', 'USD', 'INR', 'EUR', 'GBP', 'SGD', 'NZD', 'CAD'];
+        if (!SUPPORTED.includes(currency)) {
+            return res.status(400).json({ error: `Unsupported currency. Allowed: ${SUPPORTED.join(', ')}` });
+        }
+        updateData.currency = currency;
     }
+
+    if (platformFeeRate !== undefined) {
+        const rate = parseFloat(platformFeeRate);
+        if (isNaN(rate) || rate < 0) return res.status(400).json({ error: 'Invalid fee rate' });
+        updateData.platformFeeRate = rate;
+    }
+
+    if (platformFeeFixed !== undefined) {
+        const fixed = parseFloat(platformFeeFixed);
+        if (isNaN(fixed) || fixed < 0) return res.status(400).json({ error: 'Invalid fixed fee' });
+        updateData.platformFeeFixed = fixed;
+    }
+
     try {
         let settings = await prisma.platformsettings.findFirst();
         if (!settings) {
-            settings = await prisma.platformsettings.create({ data: { currency } });
+            settings = await prisma.platformsettings.create({ data: updateData });
         } else {
-            settings = await prisma.platformsettings.update({ where: { id: settings.id }, data: { currency } });
+            settings = await prisma.platformsettings.update({ where: { id: settings.id }, data: updateData });
         }
-        res.json({ message: 'Currency updated successfully', settings });
+        res.json({ message: 'Settings updated successfully', settings });
     } catch (error) {
         console.error('Update settings error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// ─── Payout Management ──────────────────────────────────────────────────────
+
+/**
+ * @route GET /api/admin/organizers
+ * @desc  Get all organizers with earnings, payout history and pending status
+ */
+router.get('/organizers', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+    try {
+        const organizers = await prisma.user.findMany({
+            where: { role: 'ORGANIZER' },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                organizerStatus: true,
+                isVerified: true,
+                businessName: true,
+                abn: true,
+                bankAccountName: true,
+                bsb: true,
+                accountNumber: true,
+                createdAt: true,
+                payout: {
+                    orderBy: { createdAt: 'desc' }
+                },
+                event_event_organizerIdTouser: {
+                    include: {
+                        purchaseorder: {
+                            where: { paymentStatus: 'SUCCESS' },
+                            select: { 
+                                amountPaidCents: true,
+                                refundedAmount: true 
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        const mappedOrganizers = organizers.map(org => {
+            // Aggregate Earnings
+            let totalEarnedCents = 0;
+            org.event_event_organizerIdTouser.forEach(ev => {
+                ev.purchaseorder.forEach(po => {
+                    const netAmount = (po.amountPaidCents || 0) - Math.round((po.refundedAmount || 0) * 100);
+                    totalEarnedCents += netAmount;
+                });
+            });
+
+            // Aggregate Paid Out
+            const totalPaidCents = org.payout
+                .filter(p => p.status === 'PAID')
+                .reduce((sum, p) => sum + p.amountCents, 0);
+
+            const pendingPayoutCount = org.payout.filter(p => p.status === 'PENDING').length;
+            const availableBalanceCents = totalEarnedCents - totalPaidCents;
+
+            return {
+                id: org.id,
+                name: org.name,
+                email: org.email,
+                businessName: org.businessName,
+                abn: org.abn,
+                bankDetails: {
+                    accountName: org.bankAccountName,
+                    bsb: org.bsb ? "XXXXXX" : null,
+                    accountNumber: org.accountNumber ? `XXXXXX${org.accountNumber.slice(-4)}` : null
+                },
+                stats: {
+                    totalEarned: totalEarnedCents / 100,
+                    totalPaid: totalPaidCents / 100,
+                    availableBalance: availableBalanceCents / 100,
+                    totalEarnedCents,
+                    totalPaidCents,
+                    availableBalanceCents
+                },
+                hasPendingPayout: pendingPayoutCount > 0,
+                payoutHistory: org.payout,
+                isVerified: org.isVerified,
+                createdAt: org.createdAt
+            };
+        });
+
+        res.json(mappedOrganizers);
+    } catch (error) {
+        console.error('Error fetching admin organizers:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * @route POST /api/admin/organizers/:id/payouts
+ * @desc  Create a new manual payout request
+ */
+router.post('/organizers/:id/payouts', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+    const { id } = req.params;
+    const { amount, notes } = req.body; // Amount in Dollars (float), optional notes
+
+    try {
+        const organizerId = parseInt(id);
+        const amountCents = Math.round(parseFloat(amount) * 100);
+
+        if (isNaN(amountCents) || amountCents <= 0) {
+            return res.status(400).json({ error: 'Invalid payout amount' });
+        }
+
+        // 1. Fetch Organizer & Calc Balance
+        const org = await prisma.user.findUnique({
+            where: { id: organizerId },
+            include: {
+                payout: true,
+                event_event_organizerIdTouser: {
+                    include: {
+                        purchaseorder: {
+                            where: { paymentStatus: 'SUCCESS' },
+                            select: { amountPaidCents: true, refundedAmount: true }
+                        }
+                    }
+                }
+            }
+        });
+
+        if (!org || org.role !== 'ORGANIZER') {
+            return res.status(404).json({ error: 'Organizer not found' });
+        }
+
+        // 2. Pending Check (Guard)
+        const hasPending = org.payout.some(p => p.status === 'PENDING');
+        if (hasPending) {
+            return res.status(400).json({ error: 'A pending payout already exists for this organizer' });
+        }
+
+        // 3. Balance Check (Guard)
+        let totalEarnedCents = 0;
+        org.event_event_organizerIdTouser.forEach(ev => {
+            ev.purchaseorder.forEach(po => {
+                totalEarnedCents += (po.amountPaidCents || 0) - Math.round((po.refundedAmount || 0) * 100);
+            });
+        });
+        const totalPaidCents = org.payout.filter(p => p.status === 'PAID').reduce((sum, p) => sum + p.amountCents, 0);
+        const availableCents = totalEarnedCents - totalPaidCents;
+
+        if (amountCents > availableCents) {
+            return res.status(400).json({ error: `Payout exceeds available balance ($${availableCents / 100})` });
+        }
+
+        // 4. Create Payout with Audit Snapshot
+        const payout = await prisma.payout.create({
+            data: {
+                organizerId,
+                amountCents,
+                currency: 'AUD',
+                status: 'PENDING',
+                bankDetailsSnapshot: {
+                    bsb: org.bsb,
+                    accountNumber: org.accountNumber,
+                    businessName: org.businessName
+                },
+                notes: notes || null
+            }
+        });
+
+        res.status(201).json(payout);
+    } catch (error) {
+        console.error('Create payout error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * @route PATCH /api/admin/payouts/:id/status
+ * @desc  Mark a payout as PAID
+ */
+router.patch('/payouts/:id/status', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+    const { id } = req.params;
+    const { status, notes } = req.body;
+
+    if (status !== 'PAID') {
+        return res.status(400).json({ error: 'Only transition to PAID is allowed' });
+    }
+
+    try {
+        const payoutId = parseInt(id);
+        const existing = await prisma.payout.findUnique({ where: { id: payoutId } });
+
+        if (!existing) {
+            return res.status(404).json({ error: 'Payout record not found' });
+        }
+
+        if (existing.status === 'PAID') {
+            return res.status(400).json({ error: 'Payout has already been completed' });
+        }
+
+        const updatedPayout = await prisma.payout.update({
+            where: { id: payoutId },
+            data: {
+                status: 'PAID',
+                paidAt: new Date(),
+                notes: notes !== undefined ? notes : existing.notes
+            }
+        });
+
+        res.json(updatedPayout);
+    } catch (error) {
+        console.error('Update payout status error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });

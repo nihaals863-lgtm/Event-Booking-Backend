@@ -15,6 +15,7 @@ model event {
   location                      String
   eventDate                     DateTime
   ticketPrice                   Float
+  ticketPriceCents              Int             @default(0)
   totalTickets                  Int
   ticketsSold                   Int             @default(0)
   image                         String?
@@ -30,6 +31,7 @@ model event {
   highlights                    String?         @db.LongText
   createdAt                     DateTime        @default(now())
   updatedAt                     DateTime        @updatedAt
+  pricingType                   event_pricingType @default(SINGLE)
   user_event_organizerIdTouser  user            @relation("event_organizerIdTouser", fields: [organizerId], references: [id], map: "Event_organizerId_fkey")
   user_event_reviewedByIdTouser user?           @relation("event_reviewedByIdTouser", fields: [reviewedById], references: [id], map: "Event_reviewedById_fkey")
   eventimage                    eventimage[]
@@ -37,6 +39,7 @@ model event {
   promocode                     promocode[]
   ticket                        ticket[]
   ticketrelease                 ticketrelease[]
+  purchaseorder                 purchaseorder[]
 
   @@index([organizerId], map: "Event_organizerId_fkey")
   @@index([reviewedById], map: "Event_reviewedById_fkey")
@@ -47,9 +50,14 @@ model ticketrelease {
   eventId     Int
   name        String
   price       Float
+  priceCents  Int       @default(0)
   quantity    Int
+  sold        Int       @default(0)
+  isActive    Boolean   @default(false)
   releaseDate DateTime?
+  endDate     DateTime?
   event       event     @relation(fields: [eventId], references: [id], onDelete: Cascade, map: "TicketRelease_eventId_fkey")
+  ticket      ticket[]
 
   @@index([eventId], map: "TicketRelease_eventId_fkey")
 }
@@ -103,17 +111,58 @@ model refreshtoken {
 }
 
 model ticket {
-  id          Int           @id @default(autoincrement())
-  eventId     Int
-  buyerName   String
-  buyerEmail  String
-  qrPayload   String        @unique(map: "Ticket_qrPayload_key")
-  status      ticket_status @default(UNUSED)
-  purchasedAt DateTime      @default(now())
-  scannedAt   DateTime?
-  event       event         @relation(fields: [eventId], references: [id], map: "Ticket_eventId_fkey")
+  id              Int           @id @default(autoincrement())
+  eventId         Int
+  buyerName       String
+  buyerEmail      String
+  qrPayload       String        @unique(map: "Ticket_qrPayload_key")
+  status          ticket_status @default(UNUSED)
+  purchasedAt     DateTime      @default(now())
+  scannedAt       DateTime?
+  ticketReleaseId Int?
+  purchaseOrderId String?
+  event           event         @relation(fields: [eventId], references: [id], map: "Ticket_eventId_fkey")
+  ticketrelease   ticketrelease? @relation(fields: [ticketReleaseId], references: [id], map: "Ticket_ticketReleaseId_fkey")
+  purchaseorder   purchaseorder? @relation(fields: [purchaseOrderId], references: [id], map: "Ticket_purchaseOrderId_fkey")
 
   @@index([eventId], map: "Ticket_eventId_fkey")
+  @@index([ticketReleaseId], map: "Ticket_ticketReleaseId_fkey")
+  @@index([purchaseOrderId], map: "Ticket_purchaseOrderId_fkey")
+}
+
+model purchaseorder {
+  id              String   @id
+  idempotencyKey  String?  @unique(map: "PurchaseOrder_idempotencyKey_key")
+  eventId         Int
+  amount          Float
+  amountCents     Int      @default(0)
+  currency        String   @default("AUD")
+  status          String   @default("COMPLETED")
+  customerEmail   String
+  createdAt       DateTime @default(now())
+
+  // Stripe Integration & Metadata Fields
+  paymentStatus           String    @default("PENDING") // PENDING | SUCCESS | FAILED
+  stripeSessionId         String?   @unique
+  stripePaymentIntentId   String?
+  amountPaid              Float?
+  amountPaidCents         Int       @default(0)
+  expiresAt               DateTime?
+  quantity                Int       @default(1)
+  ticketReleaseId         Int?
+  customerName            String?
+  userId                  Int?
+
+  // Hardening & Reliability Fields
+  processedAt             DateTime?
+  refundedAmount          Float?
+  refundedAt              DateTime?
+  statusDetail            String?   // e.g., "TICKET_PENDING", "PARTIAL_SUCCESS"
+
+  event           event    @relation(fields: [eventId], references: [id], map: "PurchaseOrder_eventId_fkey")
+  tickets         ticket[]
+
+  @@index([eventId], map: "PurchaseOrder_eventId_fkey")
 }
 
 model user {
@@ -124,12 +173,19 @@ model user {
   role                           user_role         @default(TENANT)
   status                         user_status       @default(ACTIVE)
   organizerStatus                organizer_status  @default(PENDING)
+  businessName                   String?
+  abn                            String?
+  bankAccountName                String?
+  bsb                            String?
+  accountNumber                  String?
+  payoutDetailsUpdatedAt         DateTime?
+  isVerified                     Boolean           @default(false)
   createdAt                      DateTime          @default(now())
   updatedAt                      DateTime          @updatedAt
-  isVerified                     Boolean           @default(false)
   event_event_organizerIdTouser  event[]           @relation("event_organizerIdTouser")
   event_event_reviewedByIdTouser event[]           @relation("event_reviewedByIdTouser")
   refreshtoken                   refreshtoken[]
+  payout                         payout[]
 }
 
 enum promocode_discountType {
@@ -168,11 +224,39 @@ enum event_status {
 }
 
 enum event_serviceFeeType {
-  BUYER
   ORGANIZER
+  BUYER
+}
+
+enum event_pricingType {
+  SINGLE
+  MULTI
+}
+
+enum payout_status {
+  PENDING
+  PAID
+}
+
+model payout {
+  id                    Int           @id @default(autoincrement())
+  organizerId           Int
+  amountCents           Int
+  currency              String        @default("AUD")
+  status                payout_status @default(PENDING)
+  bankDetailsSnapshot   Json
+  notes                 String?
+  createdAt             DateTime      @default(now())
+  paidAt                DateTime?
+  organizer             user          @relation(fields: [organizerId], references: [id], map: "Payout_organizerId_fkey")
+
+  @@index([organizerId], map: "Payout_organizerId_fkey")
 }
 
 model platformsettings {
-  id       Int    @id @default(autoincrement())
-  currency String @default("AUD")
+  id               Int    @id @default(autoincrement())
+  currency         String @default("AUD")
+  platformFeeRate       Float  @default(0.015)
+  platformFeeFixed      Float  @default(0.30)
+  platformFeeFixedCents Int    @default(30)
 }
