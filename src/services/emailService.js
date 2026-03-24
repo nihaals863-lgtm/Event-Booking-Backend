@@ -233,12 +233,12 @@ function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, lo
 
         ${qrBase64 ? `
         <div style="text-align: center; padding: 20px; border: 2px dashed #E5E7EB; border-radius: 16px; margin: 30px 0;">
-            <img src="${qrBase64}" width="160" height="160" style="display: block; margin: 0 auto;" alt="Ticket QR Code" />
+            <img src="cid:ticket_qr" width="160" height="160" style="display: block; margin: 0 auto;" alt="Ticket QR Code" />
             <p style="margin: 15px 0 0; color: #9CA3AF; font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.1em;">Please show this QR code at the venue</p>
         </div>
         ` : ''}
 
-        ${getCTAButton('View My Tickets', 'https://eventhubix.com/tickets')}
+        ${getCTAButton('View My Tickets', 'https://event-ticket-platform1.netlify.app/tickets')}
     `;
     return getEmailLayout(content, `Your ticket for ${eventTitle} is ready!`);
 }
@@ -279,7 +279,7 @@ function getOrganizerNotificationTemplate({ organizerName, eventTitle, quantity,
             </table>
         </div>
 
-        ${getCTAButton('View Dashboard', 'https://eventhubix.com/organizer/dashboard')}
+        ${getCTAButton('View Dashboard', 'https://event-ticket-platform1.netlify.app/organizer/dashboard')}
     `;
     return getEmailLayout(content, `You just sold ${quantity} tickets for ${eventTitle}`);
 }
@@ -315,7 +315,7 @@ function getAdminNotificationTemplate({ organizerName, organizerEmail, timestamp
             </table>
         </div>
 
-        ${getCTAButton('Review Organizer', 'https://eventhubix.com/admin/approvals')}
+        ${getCTAButton('Review Organizer', 'https://event-ticket-platform1.netlify.app/admin/approvals')}
     `;
     return getEmailLayout(content, `New organizer registration: ${organizerName}`);
 }
@@ -385,6 +385,19 @@ async function sendTicketConfirmation(attendeeData, orderData, tickets) {
     });
 
     let attachments = [];
+    
+    // CID Attachment for QR Code (Inline)
+    if (qrBase64) {
+        const base64Data = qrBase64.split(',')[1]; // Extract raw base64
+        attachments.push({
+            content: base64Data,
+            filename: 'qr.png',
+            type: 'image/png',
+            disposition: 'inline',
+            content_id: 'ticket_qr'
+        });
+    }
+
     if (pdfBuffer) {
         try {
             const base64Content = Buffer.from(pdfBuffer).toString('base64');

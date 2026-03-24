@@ -12,7 +12,8 @@ app.use(cors({
         const isAllowed = origin.includes('localhost') || 
                           origin.includes('127.0.0.1') || 
                           origin.includes('ngrok') || 
-                          origin.includes('netlify.app');
+                          origin.includes('netlify.app') ||
+                          origin === 'https://event-ticket-platform1.netlify.app';
         
         if (isAllowed) {
             callback(null, true);
