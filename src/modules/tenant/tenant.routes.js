@@ -229,20 +229,36 @@ router.post('/purchase', async (req, res) => {
                 orderId, 
                 totalAmount: finalTotal,
                 eventTitle: event.title,
+                eventDate: event.eventDate,
+                location: event.location,
                 organizerEmail: event.user_event_organizerIdTouser?.email
             };
         });
 
         // Trigger Emails (Non-blocking Fire-and-Forget)
-        emailService.processPurchaseEmails({
-            attendeeEmail,
-            attendeeName,
-            orderId: result.orderId,
-            totalAmount: result.totalAmount,
-            eventTitle: result.eventTitle,
-            organizerEmail: result.organizerEmail,
-            tickets: result.tickets
+        const latestOrder = await prisma.purchaseorder.findUnique({
+            where: { id: result.orderId }
         });
+
+        if (latestOrder && !latestOrder.emailSent) {
+            emailService.processPurchaseEmails({
+                attendeeEmail,
+                attendeeName,
+                orderId: result.orderId,
+                totalAmount: result.totalAmount,
+                eventTitle: result.eventTitle,
+                eventDate: result.eventDate,
+                location: result.location,
+                organizerEmail: result.organizerEmail,
+                tickets: result.tickets
+            });
+
+            // Mark as sent
+            await prisma.purchaseorder.update({
+                where: { id: result.orderId },
+                data: { emailSent: true }
+            });
+        }
 
         res.status(201).json({
             message: 'Purchase successful',

@@ -160,20 +160,37 @@ async function confirmOrderPayment(sessionOrIntent) {
 
         // 5. Fire Emails (OUTSIDE Transaction for Resilience/Speed)
         try {
-            const event = await prisma.event.findUnique({
-                where: { id: order.eventId },
-                include: { user_event_organizerIdTouser: true }
+            // Re-fetch to check idempotency flag
+            const latestOrder = await prisma.purchaseorder.findUnique({
+                where: { id: orderId }
             });
 
-            emailService.processPurchaseEmails({
-                attendeeEmail: order.customerEmail,
-                attendeeName: order.customerName,
-                orderId: orderId,
-                totalAmount: amountPaid,
-                eventTitle: event.title,
-                organizerEmail: event.user_event_organizerIdTouser?.email,
-                tickets: generatedTickets
-            });
+            if (latestOrder && !latestOrder.emailSent) {
+                const event = await prisma.event.findUnique({
+                    where: { id: order.eventId },
+                    include: { user_event_organizerIdTouser: true }
+                });
+
+                emailService.processPurchaseEmails({
+                    attendeeEmail: order.customerEmail,
+                    attendeeName: order.customerName,
+                    orderId: orderId,
+                    totalAmount: amountPaidCents / 100,
+                    eventTitle: event.title,
+                    eventDate: event.eventDate,
+                    location: event.location,
+                    organizerEmail: event.user_event_organizerIdTouser?.email,
+                    tickets: generatedTickets
+                });
+
+                // Mark as sent
+                await prisma.purchaseorder.update({
+                    where: { id: orderId },
+                    data: { emailSent: true }
+                });
+            } else {
+                console.log(`[EMAIL_SKIPPED] Idempotency: Emails already sent for ${orderId}`);
+            }
         } catch (emailError) {
             console.error(`[POST_PAYMENT_ERROR] Stats/Email update failed for ${orderId}:`, emailError.message);
         }

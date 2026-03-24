@@ -158,6 +158,7 @@ model purchaseorder {
   refundedAmount Float?
   refundedAt     DateTime?
   statusDetail   String? // e.g., "TICKET_PENDING", "PARTIAL_SUCCESS"
+  emailSent      Boolean   @default(false)
 
   event   event    @relation(fields: [eventId], references: [id], map: "PurchaseOrder_eventId_fkey")
   tickets ticket[]
