@@ -14,3 +14,4 @@ test-db.js
 seed.js
 test_*.js
 __MACOSX/
+.env
