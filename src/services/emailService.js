@@ -126,51 +126,61 @@ async function generateTicketPDF(eventData, attendeeData, orderData, qrBase64) {
 }
 
 /**
- * Base Layout Wrapper for consistency
+ * Base Layout Wrapper for consistency (Premium Redesign)
  */
 function getEmailLayout(content, preheader = '') {
     return `
         <!DOCTYPE html>
         <html>
         <head>
+            <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>EventHubix Notification</title>
             <style>
-                @media only screen and (max-width: 620px) {
-                    .container { width: 100% !important; padding: 10px !important; }
-                    .content { padding: 20px !important; }
+                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+                body { margin: 0; padding: 0; min-width: 100%; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important; background-color: #F8FAFC; -webkit-font-smoothing: antialiased; }
+                table { border-spacing: 0; }
+                img { border: 0; }
+                .wrapper { width: 100%; table-layout: fixed; background-color: #F8FAFC; padding-bottom: 40px; padding-top: 40px; }
+                .main { background-color: #FFFFFF; margin: 0 auto; width: 100%; max-width: 600px; border-spacing: 0; border-radius: 24px; overflow: hidden; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.02); }
+                @media only screen and (max-width: 600px) {
+                    .main { border-radius: 0 !important; }
+                    .content { padding: 30px 20px !important; }
                 }
             </style>
         </head>
-        <body style="background-color: #F3F4F6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 40px 0; -webkit-font-smoothing: antialiased;">
-            <div style="display: none; max-height: 0; overflow: hidden;">${preheader}</div>
-            <table class="container" border="0" cellpadding="0" cellspacing="0" width="600" align="center" style="margin: 0 auto; background-color: #FFFFFF; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-                <!-- Header -->
-                <tr>
-                    <td style="background-color: #4F46E5; padding: 30px; text-align: center;">
-                        <h1 style="color: #FFFFFF; margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -0.5px;">EventHubix</h1>
-                    </td>
-                </tr>
-                <!-- Body -->
-                <tr>
-                    <td class="content" style="padding: 40px;">
-                        ${content}
-                    </td>
-                </tr>
-                <!-- Footer -->
-                <tr>
-                    <td style="padding: 30px; text-align: center; background-color: #F9FAFB; border-top: 1px solid #E5E7EB;">
-                        <p style="margin: 0; color: #6B7280; font-size: 14px;">© 2026 <strong>EventHubix</strong></p>
-                        <p style="margin: 8px 0 0; color: #9CA3AF; font-size: 12px; line-height: 1.6;">
-                            Need help? Contact <a href="mailto:${REPLY_TO_EMAIL}" style="color: #4F46E5; text-decoration: none;">${REPLY_TO_EMAIL}</a><br>
-                            For refunds, contact us at <span style="color: #4F46E5;">${REPLY_TO_EMAIL}</span><br>
-                            <span style="font-size: 10px; opacity: 0.8; display: block; margin-top: 10px;">
-                                By using EventHubix, you agree to our <a href="https://event-ticket-platform1.netlify.app/terms-and-conditions" style="color: #4F46E5; text-decoration: underline;">Terms & Conditions</a>. 
-                                Your data is handled according to our <a href="https://event-ticket-platform1.netlify.app/privacy-policy" style="color: #4F46E5; text-decoration: underline;">Privacy Policy</a>.
-                            </span>
-                        </p>
-                    </td>
-                </tr>
-            </table>
+        <body>
+            <center class="wrapper">
+                <div style="display: none; max-height: 0; overflow: hidden; font-size: 1px; color: #F8FAFC; line-height: 1px;">${preheader}</div>
+                <table class="main" width="100%">
+                    <!-- Header -->
+                    <tr>
+                        <td style="padding: 40px 0 35px; text-align: center; background: linear-gradient(135deg, #4F46E5 0%, #6366F1 100%);">
+                            <h1 style="color: #FFFFFF; margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -1px;">EventHubix</h1>
+                        </td>
+                    </tr>
+                    <!-- Body -->
+                    <tr>
+                        <td class="content" style="padding: 50px 40px; background-color: #FFFFFF;">
+                            ${content}
+                        </td>
+                    </tr>
+                    <!-- Footer -->
+                    <tr>
+                        <td style="padding: 40px 40px 50px; text-align: center; background-color: #FBFCFE; border-top: 1px solid #F1F5F9;">
+                            <p style="margin: 0; color: #94A3B8; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em;">© 2026 <strong>EventHubix</strong></p>
+                            <div style="margin-top: 20px; color: #64748B; font-size: 14px; line-height: 1.6;">
+                                <p style="margin: 0;">Need any assistance? Connect with our <a href="mailto:${REPLY_TO_EMAIL}" style="color: #4F46E5; text-decoration: none; font-weight: 600;">Support Team</a></p>
+                                <p style="margin: 15px 0 0; font-size: 11px; color: #cbd5e1; max-width: 400px; margin-left: auto; margin-right: auto;">
+                                    This email was sent regarding your order. By using our platform, you agree to our 
+                                    <a href="https://event-ticket-platform1.netlify.app/terms-and-conditions" style="color: #94a3b8; text-decoration: underline;">Terms</a> and 
+                                    <a href="https://event-ticket-platform1.netlify.app/privacy-policy" style="color: #94a3b8; text-decoration: underline;">Privacy Policy</a>.
+                                </p>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+            </center>
         </body>
         </html>
     `;
@@ -181,8 +191,14 @@ function getEmailLayout(content, preheader = '') {
  */
 function getCTAButton(text, url) {
     return `
-        <div style="text-align: center; margin: 30px 0;">
-            <a href="${url}" style="background-color: #4F46E5; color: #FFFFFF; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: 700; display: inline-block; font-size: 16px; box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.2);">
+        <div style="text-align: center; margin: 40px 0;">
+            <!--[if mso]>
+            <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${url}" style="height:55px;v-text-anchor:middle;width:220px;" arcsize="15%" stroke="f" fillcolor="#4F46E5">
+                <w:anchorlock/>
+                <center style="color:#ffffff;font-family:sans-serif;font-size:16px;font-weight:bold;">${text}</center>
+            </v:roundrect>
+            <![endif]-->
+            <a href="${url}" style="background-color: #4F46E5; color: #FFFFFF; padding: 18px 36px; border-radius: 14px; text-decoration: none; font-weight: 700; display: inline-block; font-size: 16px; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.2), 0 4px 6px -2px rgba(79, 70, 229, 0.1);">
                 ${text}
             </a>
         </div>
@@ -193,43 +209,50 @@ function getCTAButton(text, url) {
  * Template: Ticket Confirmation (Buyer)
  */
 function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, location, orderId, amount, ticketsCount, qrBase64 }) {
-        const formattedDate = (eventDate instanceof Date) 
-            ? eventDate.toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' })
-            : (eventDate || 'Coming Soon');
+    const formattedDate = (eventDate instanceof Date) 
+        ? eventDate.toLocaleString('en-AU', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : (eventDate || 'Coming Soon');
 
-        const content = `
-            <h2 style="margin: 0 0 15px; color: #111827; font-size: 24px; text-align: center;">Hi ${attendeeName} 👋</h2>
-            <p style="margin: 0 0 25px; color: #4B5563; font-size: 16px; text-align: center; line-height: 1.5;">
-                Your ticket is confirmed! We're excited to see you at <strong>${eventTitle}</strong>.
-            </p>
-            
-            <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 12px; padding: 25px; margin-bottom: 30px;">
-                <table border="0" cellpadding="0" cellspacing="0" width="100%">
-                    <tr>
-                        <td style="padding-bottom: 15px; color: #6B7280; font-size: 12px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Event Details</td>
-                    </tr>
-                    <tr>
-                        <td style="font-size: 16px; color: #111827; line-height: 1.6;">
-                            <strong style="font-size: 18px; color: #4F46E5;">${eventTitle}</strong><br>
-                            📅 ${formattedDate}<br>
-                            📍 ${location || 'Venue TBD'}
-                        </td>
-                    </tr>
-                <tr><td style="padding: 15px 0; border-bottom: 1px solid #EEF2F6;"></td></tr>
+    const content = `
+        <div style="text-align: center; margin-bottom: 35px;">
+            <div style="display: inline-block; padding: 12px 24px; background-color: #F0F9FF; border-radius: 100px; margin-bottom: 20px;">
+                <span style="color: #0284C7; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.15em;">Booking Confirmed</span>
+            </div>
+            <h2 style="margin: 0; color: #0F172A; font-size: 32px; font-weight: 800; letter-spacing: -1px; line-height: 1.1;">You're going to <br/><span style="color: #4F46E5;">${eventTitle}</span></h2>
+            <p style="margin: 15px 0 0; color: #64748B; font-size: 17px; line-height: 1.6;">Hi ${attendeeName}, we've secured your spot! Your digital pass is ready below.</p>
+        </div>
+        
+        <div style="background-color: #FFFFFF; border: 1.5px solid #F1F5F9; border-radius: 28px; padding: 35px; margin-bottom: 35px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02);">
+            <table border="0" cellpadding="0" cellspacing="0" width="100%">
                 <tr>
-                    <td style="padding-top: 15px;">
-                        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-size: 14px; color: #4B5563;">
+                    <td style="padding-bottom: 25px; border-bottom: 1.5px dashed #F1F5F9;">
+                        <p style="margin: 0 0 5px; color: #94A3B8; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em;">Event Details</p>
+                        <p style="margin: 0; font-size: 18px; color: #1E293B; font-weight: 700; line-height: 1.4;">${eventTitle}</p>
+                        <p style="margin: 8px 0 0; font-size: 15px; color: #64748B;">📅 ${formattedDate}</p>
+                        <p style="margin: 4px 0 0; font-size: 15px; color: #64748B;">📍 ${location || 'Venue TBD'}</p>
+                    </td>
+                </tr>
+                <tr>
+                    <td style="padding-top: 25px;">
+                        <table border="0" cellpadding="0" cellspacing="0" width="100%">
                             <tr>
-                                <td style="padding: 4px 0;">Order ID</td>
-                                <td align="right" style="color: #111827; font-family: monospace; font-weight: 700;">${orderId}</td>
+                                <td style="width: 50%; vertical-align: top; padding-right: 15px;">
+                                    <p style="margin: 0 0 4px; color: #94A3B8; font-size: 10px; font-weight: 800; text-transform: uppercase;">Order ID</p>
+                                    <p style="margin: 0; font-size: 14px; color: #1E293B; font-weight: 700; font-family: 'Courier New', monospace;">${orderId}</p>
+                                </td>
+                                <td style="width: 50%; vertical-align: top; text-align: right;">
+                                    <p style="margin: 0 0 4px; color: #94A3B8; font-size: 10px; font-weight: 800; text-transform: uppercase;">Tickets</p>
+                                    <p style="margin: 0; font-size: 14px; color: #1E293B; font-weight: 700;">${ticketsCount} Admit(s)</p>
+                                </td>
                             </tr>
                             <tr>
-                                <td style="padding: 4px 0;">Tickets</td>
-                                <td align="right" style="color: #111827; font-weight: 700;">${ticketsCount} Admit(s)</td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 8px 0 0; color: #111827; font-weight: 700;">Total Amount</td>
-                                <td align="right" style="padding: 8px 0 0; color: #111827; font-weight: 800; font-size: 18px;">${amount}</td>
+                                <td colspan="2" style="padding-top: 20px;">
+                                    <div style="background-color: #FAFAFB; padding: 15px 20px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center;">
+                                        <span style="font-size: 13px; color: #475569; font-weight: 600;">Paid Total</span>
+                                        <span style="font-size: 20px; color: #4F46E5; font-weight: 800; float: right;">${amount}</span>
+                                        <div style="clear: both;"></div>
+                                    </div>
+                                </td>
                             </tr>
                         </table>
                     </td>
@@ -238,15 +261,20 @@ function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, lo
         </div>
 
         ${qrBase64 ? `
-        <div style="text-align: center; padding: 20px; border: 2px dashed #E5E7EB; border-radius: 16px; margin: 30px 0;">
-            <img src="cid:ticket_qr" width="160" height="160" style="display: block; margin: 0 auto;" alt="Ticket QR Code" />
-            <p style="margin: 15px 0 0; color: #9CA3AF; font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.1em;">Please show this QR code at the venue</p>
+        <div style="text-align: center; padding: 40px 20px; background-color: #F8FAFC; border-radius: 28px; margin: 35px 0; border: 2px dashed #E2E8F0;">
+            <img src="cid:ticket_qr" width="180" height="180" style="display: block; margin: 0 auto; border-radius: 12px; border: 1px solid #E2E8F0; padding: 10px; background-color: white;" alt="Ticket QR Code" />
+            <p style="margin: 25px 0 0; color: #64748B; font-size: 11px; text-transform: uppercase; font-weight: 800; letter-spacing: 0.2em;">Scan this at entry</p>
+            <p style="margin: 10px 0 0; color: #94A3B8; font-size: 13px; font-weight: 500;">A PDF copy is also attached to this email.</p>
         </div>
         ` : ''}
 
-        ${getCTAButton('View My Tickets', 'https://event-ticket-platform1.netlify.app/tickets')}
+        ${getCTAButton('View My Tickets', 'https://eventhubix.com/tickets')}
+        
+        <p style="text-align: center; color: #94A3B8; font-size: 13px; margin-top: 20px;">
+            Need a refund? Check out our <a href="https://eventhubix.com/terms-and-conditions" style="color: #4F46E5; text-decoration: none;">refund policy</a> or reply to this email.
+        </p>
     `;
-    return getEmailLayout(content, `Your ticket for ${eventTitle} is ready!`);
+    return getEmailLayout(content, `You're going to ${eventTitle}! Checkout your tickets.`);
 }
 
 /**
@@ -254,40 +282,50 @@ function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, lo
  */
 function getOrganizerNotificationTemplate({ organizerName, eventTitle, quantity, amount, orderId, buyerName, buyerEmail }) {
     const content = `
-        <h2 style="margin: 0 0 8px; color: #10B981; font-size: 24px; text-align: center;">🎉 Ticket Sold!</h2>
-        <p style="margin: 0 0 25px; color: #4B5563; font-size: 16px; text-align: center;">
-            You have a new attendee for your event: <strong>${eventTitle}</strong>
-        </p>
-
-        <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 12px; padding: 25px;">
-            <h3 style="margin: 0 0 15px; color: #111827; font-size: 14px; text-transform: uppercase;">Transaction Details</h3>
-            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-size: 15px; border-collapse: collapse;">
-                <tr style="border-bottom: 1px solid #F3F4F6;">
-                    <td style="padding: 12px 0; color: #6B7280;">Order ID</td>
-                    <td align="right" style="padding: 12px 0; font-weight: 700;">${orderId}</td>
-                </tr>
-                <tr style="border-bottom: 1px solid #F3F4F6;">
-                    <td style="padding: 12px 0; color: #6B7280;">Buyer</td>
-                    <td align="right" style="padding: 12px 0; font-weight: 700;">${buyerName}</td>
-                </tr>
-                <tr style="border-bottom: 1px solid #F3F4F6;">
-                    <td style="padding: 12px 0; color: #6B7280;">Buyer Email</td>
-                    <td align="right" style="padding: 12px 0; font-weight: 700; color: #4F46E5;">${buyerEmail}</td>
-                </tr>
-                <tr style="border-bottom: 1px solid #F3F4F6;">
-                    <td style="padding: 12px 0; color: #6B7280;">Quantity</td>
-                    <td align="right" style="padding: 12px 0; font-weight: 700;">${quantity} Ticket(s)</td>
-                </tr>
-                <tr>
-                    <td style="padding: 15px 0 0; font-weight: 800; font-size: 18px; color: #111827;">Total Revenue</td>
-                    <td align="right" style="padding: 15px 0 0; font-weight: 800; font-size: 22px; color: #4F46E5;">${amount}</td>
-                </tr>
-            </table>
+        <div style="text-align: center; margin-bottom: 35px;">
+            <div style="display: inline-block; padding: 12px 24px; background-color: #ECFDF5; border-radius: 100px; margin-bottom: 20px;">
+                <span style="color: #059669; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.15em;">Transaction Successful</span>
+            </div>
+            <h2 style="margin: 0; color: #0F172A; font-size: 32px; font-weight: 800; letter-spacing: -1px; line-height: 1.1;">🎉 Ticket Sold!</h2>
+            <p style="margin: 15px 0 0; color: #64748B; font-size: 16px;">Great news! You have a new registration for your event.</p>
         </div>
 
-        ${getCTAButton('View Dashboard', 'https://event-ticket-platform1.netlify.app/organizer/dashboard')}
+        <div style="background-color: #F8FAFC; border: 1.5px solid #F1F5F9; border-radius: 28px; padding: 35px; margin-bottom: 35px;">
+            <p style="margin: 0 0 5px; color: #94A3B8; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em;">Event Project</p>
+            <p style="margin: 0; font-size: 18px; color: #1E293B; font-weight: 700; line-height: 1.4;">${eventTitle}</p>
+            
+            <div style="margin-top: 30px; padding: 25px; background-color: #FFFFFF; border-radius: 20px; border: 1px solid #E2E8F0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+                <p style="margin: 0 0 5px; color: #94A3B8; font-size: 10px; font-weight: 800; text-transform: uppercase; text-align: center;">Total Revenue</p>
+                <h3 style="margin: 0; font-size: 36px; color: #4F46E5; font-weight: 800; text-align: center; letter-spacing: -1px;">${amount}</h3>
+                <p style="margin: 5px 0 0; color: #64748B; font-size: 13px; text-align: center;">for <strong>${quantity}</strong> ticket(s)</p>
+            </div>
+
+            <div style="margin-top: 35px; border-top: 1.5px dashed #E2E8F0; pt-30px;">
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 25px;">
+                    <tr>
+                        <td style="padding-bottom: 15px;">
+                            <p style="margin: 0 0 4px; color: #94A3B8; font-size: 10px; font-weight: 800; text-transform: uppercase;">Buyer Details</p>
+                            <p style="margin: 0; font-size: 15px; color: #1E293B; font-weight: 700;">${buyerName}</p>
+                            <p style="margin: 2px 0 0; font-size: 13px; color: #64748B;">${buyerEmail}</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding-top: 15px;">
+                            <p style="margin: 0 0 4px; color: #94A3B8; font-size: 10px; font-weight: 800; text-transform: uppercase;">Reference ID</p>
+                            <p style="margin: 0; font-size: 14px; color: #1E293B; font-weight: 700; font-family: 'Courier New', monospace;">${orderId}</p>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        ${getCTAButton('View Analytics Dashboard', 'https://event-ticket-platform1.netlify.app/organizer/dashboard')}
+        
+        <p style="text-align: center; color: #94A3B8; font-size: 13px; margin-top: 20px;">
+            This notification was sent by EventHubix Platform. <br/>You can manage your notification preferences in your dashboard settings.
+        </p>
     `;
-    return getEmailLayout(content, `You just sold ${quantity} tickets for ${eventTitle}`);
+    return getEmailLayout(content, `You just sold ${quantity} tickets for ${eventTitle}!`);
 }
 
 /**
@@ -295,33 +333,43 @@ function getOrganizerNotificationTemplate({ organizerName, eventTitle, quantity,
  */
 function getAdminNotificationTemplate({ organizerName, organizerEmail, timestamp }) {
     const content = `
-        <h2 style="margin: 0 0 8px; color: #4F46E5; font-size: 22px;">🆕 New Organizer Registration</h2>
-        <p style="margin: 0 0 25px; color: #4B5563; font-size: 15px;">
-            A new user has registered as an organizer and is awaiting approval.
-        </p>
-
-        <div style="background-color: #FEF2F2; border: 1px solid #FEE2E2; border-radius: 8px; padding: 12px 16px; margin-bottom: 25px;">
-            <p style="margin: 0; color: #B91C1C; font-size: 13px; font-weight: 600;">Status: Pending Admin Approval</p>
+        <div style="text-align: center; margin-bottom: 35px;">
+            <div style="display: inline-block; padding: 12px 24px; background-color: #FEF2F2; border-radius: 100px; margin-bottom: 20px; border: 1px solid #FEE2E2;">
+                <span style="color: #EF4444; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.15em;">Pending Approval</span>
+            </div>
+            <h2 style="margin: 0; color: #0F172A; font-size: 28px; font-weight: 800; letter-spacing: -1px; line-height: 1.1;">🆕 New Organiser Registration</h2>
+            <p style="margin: 15px 0 0; color: #64748B; font-size: 16px;">An account is awaiting your review and activation.</p>
         </div>
 
-        <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 12px; padding: 25px; margin-bottom: 25px;">
-            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-size: 15px;">
+        <div style="background-color: #FFFFFF; border: 1.5px solid #F1F5F9; border-radius: 28px; padding: 35px; margin-bottom: 35px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02);">
+            <p style="margin: 0 0 25px; color: #94A3B8; font-size: 11px; font-weight: 800; text-transform: uppercase; border-bottom: 1px solid #F1F5F9; padding-bottom: 15px;">Registrant Profile</p>
+            <table border="0" cellpadding="0" cellspacing="0" width="100%">
                 <tr>
-                    <td style="padding: 8px 0; color: #6B7280;">Name</td>
-                    <td align="right" style="padding: 8px 0; font-weight: 700; color: #111827;">${organizerName}</td>
+                    <td style="padding-bottom: 12px;">
+                        <p style="margin: 0; color: #64748B; font-size: 13px; font-weight: 600;">Full Name</p>
+                        <p style="margin: 4px 0 0; color: #0F172A; font-size: 16px; font-weight: 700;">${organizerName}</p>
+                    </td>
                 </tr>
                 <tr>
-                    <td style="padding: 8px 0; color: #6B7280;">Email</td>
-                    <td align="right" style="padding: 8px 0; font-weight: 700; color: #4F46E5;">${organizerEmail}</td>
+                    <td style="padding-bottom: 12px; padding-top: 12px;">
+                        <p style="margin: 0; color: #64748B; font-size: 13px; font-weight: 600;">Email Address</p>
+                        <p style="margin: 4px 0 0; color: #4F46E5; font-size: 16px; font-weight: 700;">${organizerEmail}</p>
+                    </td>
                 </tr>
                 <tr>
-                    <td style="padding: 8px 0; color: #6B7280;">Timestamp</td>
-                    <td align="right" style="padding: 8px 0; color: #111827;">${timestamp}</td>
+                    <td style="padding-top: 12px;">
+                        <p style="margin: 0; color: #64748B; font-size: 13px; font-weight: 600;">Submitted At</p>
+                        <p style="margin: 4px 0 0; color: #0F172A; font-size: 16px; font-weight: 700;">${timestamp}</p>
+                    </td>
                 </tr>
             </table>
         </div>
 
-        ${getCTAButton('Review Organizer', 'https://event-ticket-platform1.netlify.app/admin/approvals')}
+        ${getCTAButton('Review & Approve Submission', 'https://event-ticket-platform1.netlify.app/admin/approvals')}
+        
+        <p style="text-align: center; color: #94A3B8; font-size: 12px; margin-top: 30px; letter-spacing: 0.05em; text-transform: uppercase;">
+            Admin Governance • EventHubix Internal Notification
+        </p>
     `;
     return getEmailLayout(content, `New organizer registration: ${organizerName}`);
 }
