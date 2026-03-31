@@ -415,4 +415,80 @@ router.get('/settings', async (req, res) => {
     }
 });
 
+/**
+ * @route GET /api/public/blogs
+ * @desc  Get all published blog posts
+ */
+router.get('/blogs', async (req, res) => {
+    try {
+        const blogs = await prisma.blog.findMany({
+            where: { status: 'PUBLISHED' },
+            orderBy: { publishedAt: 'desc' }
+        });
+        res.json(blogs);
+    } catch (error) {
+        console.error('Error fetching public blogs:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * @route GET /api/public/blogs/:slug
+ * @desc  Get a single blog post by slug
+ */
+router.get('/blogs/:slug', async (req, res) => {
+    try {
+        const { slug } = req.params;
+        const blog = await prisma.blog.findUnique({
+            where: { slug, status: 'PUBLISHED' }
+        });
+        if (!blog) return res.status(404).json({ error: 'Blog post not found' });
+        res.json(blog);
+    } catch (error) {
+        console.error('Error fetching blog post:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * @route POST /api/public/newsletter/subscribe
+ * @desc  Subscribe a new email to the newsletter
+ */
+router.post('/newsletter/subscribe', async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email || !email.includes('@')) {
+            return res.status(400).json({ error: 'Please provide a valid email address.' });
+        }
+
+        // Check if already subscribed
+        const existing = await prisma.newsletter.findUnique({
+            where: { email: email.toLowerCase() }
+        });
+
+        if (existing) {
+            // Already subscribed, return 200 to be friendly and not leak existence too harshly
+            return res.status(200).json({ message: "You're already subscribed! Stay tuned for updates." });
+        }
+
+        // Save to DB
+        await prisma.newsletter.create({
+            data: { email: email.toLowerCase() }
+        });
+
+        // Trigger welcome email (fire-and-forget)
+        const { sendNewsletterWelcome } = require('../../services/emailService');
+        setImmediate(() => {
+            sendNewsletterWelcome(email).catch(err => {
+                console.error('[NEWSLETTER_EMAIL_ERROR]', err.message);
+            });
+        });
+
+        res.status(201).json({ message: 'Welcome to the loop! Please check your email.' });
+    } catch (error) {
+        console.error('Newsletter subscription error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 module.exports = router;

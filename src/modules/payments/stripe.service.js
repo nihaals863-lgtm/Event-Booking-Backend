@@ -13,18 +13,27 @@ const stripeService = {
             throw new Error('STRIPE_SECRET_KEY is not configured in environment variables.');
         }
 
+        // Robust URL resolution
+        const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+        const successUrl = `${frontendUrl}/order-success?session_id={CHECKOUT_SESSION_ID}&order_id=${orderId}`;
+        const cancelUrl = metadata.eventId 
+            ? `${frontendUrl}/events/${metadata.eventId}`
+            : `${frontendUrl}/home`;
+
+        console.log(`[STRIPE_SESSION_CREATE] orderId=${orderId} successUrl=${successUrl} cancelUrl=${cancelUrl}`);
+
         const session = await stripe.checkout.sessions.create({
             payment_method_types: ['card'],
             customer_email: customerEmail,
             line_items: [
                 {
                     price_data: {
-                        currency: 'aud', // Migrated from INR to AUD
+                        currency: process.env.STRIPE_CURRENCY || 'aud',
                         product_data: {
                             name: `${eventTitle} - ${ticketName}`,
                             description: `Order ID: ${orderId}`,
                         },
-                        unit_amount: price, // Now directly passing cents from backend
+                        unit_amount: price, 
                     },
                     quantity: quantity,
                 },
@@ -40,9 +49,9 @@ const stripeService = {
                     orderId
                 }
             },
-            success_url: `${process.env.FRONTEND_URL}/order-success?session_id={CHECKOUT_SESSION_ID}&order_id=${orderId}`,
-            cancel_url: `${process.env.FRONTEND_URL}/events/${metadata.eventId}`,
-            expires_at: Math.floor(Date.now() / 1000) + (30 * 60) // Expire in 30 minutes
+            success_url: successUrl,
+            cancel_url: cancelUrl,
+            expires_at: Math.floor(Date.now() / 1000) + (30 * 60) 
         });
 
         return session;

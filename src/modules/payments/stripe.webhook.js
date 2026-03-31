@@ -115,24 +115,19 @@ async function confirmOrderPayment(sessionOrIntent) {
                     data: { sold: { increment: order.quantity } }
                 });
 
-                // AUTO-PROGRESSION: If tier is sold out, activate next one
-                if (release.sold >= release.quantity) {
-                    const nextRelease = await tx.ticketrelease.findFirst({
-                        where: { 
-                            eventId: order.eventId, 
-                            isActive: false, 
-                            quantity: { gt: prisma.ticketrelease.fields.sold } 
-                        },
-                        orderBy: [ { releaseDate: 'asc' }, { price: 'asc' } ]
-                    });
-                    if (nextRelease) {
-                        await tx.ticketrelease.update({ where: { id: nextRelease.id }, data: { isActive: true } });
-                        await tx.ticketrelease.update({ where: { id: release.id }, data: { isActive: false } });
-                        console.log(`[AUTO_SWITCH] Tier ${release.name} full -> Activated ${nextRelease.name}`);
-                    }
-                }
+                // (Removed AUTO-PROGRESSION logic to allow organizer manual control of multiple active tiers)
             }
             
+            // 3.5. Increment Promo Code Usage
+            const promoCodeId = sessionOrIntent.metadata?.promoCodeId;
+            if (promoCodeId && promoCodeId !== 'null') {
+                await tx.promocode.update({
+                    where: { id: parseInt(promoCodeId) },
+                    data: { currentUsage: { increment: 1 } }
+                });
+                console.log(`[PROMO_USED] promoCodeId=${promoCodeId}`);
+            }
+
             await tx.event.update({
                 where: { id: order.eventId },
                 data: { ticketsSold: { increment: order.quantity } }

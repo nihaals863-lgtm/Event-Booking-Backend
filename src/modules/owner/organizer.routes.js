@@ -63,24 +63,15 @@ router.post('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
                 }))
             } : undefined,
             ticketrelease: (pricingType === 'MULTI' && ticketReleases && ticketReleases.length > 0) ? {
-                create: (() => {
-                    let foundActive = false;
-                    return ticketReleases.filter(tr => parseInt(tr.quantity) > 0).map(tr => {
-                        const trIsActive = tr.isActive ?? false;
-                        const finalActive = trIsActive && !foundActive;
-                        if (finalActive) foundActive = true;
-
-                        return {
-                            name: tr.name,
-                            price: parseFloat(tr.price) || 0,
-                            priceCents: Math.round((parseFloat(tr.price) || 0) * 100),
-                            quantity: parseInt(tr.quantity) || 0,
-                            releaseDate: tr.releaseDate ? new Date(tr.releaseDate) : null,
-                            endDate: tr.endDate ? new Date(tr.endDate) : null,
-                            isActive: finalActive
-                        };
-                    });
-                })()
+                create: ticketReleases.filter(tr => parseInt(tr.quantity) > 0).map(tr => ({
+                    name: tr.name,
+                    price: parseFloat(tr.price) || 0,
+                    priceCents: Math.round((parseFloat(tr.price) || 0) * 100),
+                    quantity: parseInt(tr.quantity) || 0,
+                    releaseDate: tr.releaseDate ? new Date(tr.releaseDate) : null,
+                    endDate: tr.endDate ? new Date(tr.endDate) : null,
+                    isActive: !!tr.isActive
+                }))
             } : undefined,
             updatedAt: new Date()
         };
@@ -214,7 +205,7 @@ router.patch('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), as
                 highlights: highlights ? JSON.stringify(highlights) : undefined,
                 pricingType: pricingType || undefined,
                 updatedAt: new Date(),
-                status: 'PENDING'
+                status: event.status === 'APPROVED' ? 'APPROVED' : 'PENDING'
             }
         });
 
@@ -268,13 +259,7 @@ router.patch('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), as
             }
 
             // Update or Create provided releases
-            let foundActive = false;
             for (const tr of ticketReleases) {
-                // Enforce single active tier: only the first one encountered as active stays active
-                const trIsActive = tr.isActive ?? false;
-                const finalActive = trIsActive && !foundActive;
-                if (finalActive) foundActive = true;
-
                 const releaseData = {
                     name: tr.name,
                     price: parseFloat(tr.price) || 0,
@@ -282,7 +267,7 @@ router.patch('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), as
                     quantity: parseInt(tr.quantity) || 0,
                     releaseDate: tr.releaseDate ? new Date(tr.releaseDate) : null,
                     endDate: tr.endDate ? new Date(tr.endDate) : null,
-                    isActive: finalActive
+                    isActive: !!tr.isActive
                 };
 
                 if (tr.id) {
@@ -327,20 +312,10 @@ router.patch('/releases/:id/toggle', requireAuth, requireRole(['ORGANIZER', 'ADM
 
         const newActiveState = !release.isActive;
 
-        // Atomic: if activating, deactivate all other releases for this event first
-        await prisma.$transaction(async (tx) => {
-            if (newActiveState) {
-                // Deactivate all sibling releases
-                await tx.ticketrelease.updateMany({
-                    where: { eventId: release.eventId, id: { not: releaseId } },
-                    data: { isActive: false }
-                });
-            }
-            // Toggle this one
-            await tx.ticketrelease.update({
-                where: { id: releaseId },
-                data: { isActive: newActiveState }
-            });
+        // Atomic: Toggle this one (Removed single active policy)
+        await prisma.ticketrelease.update({
+            where: { id: releaseId },
+            data: { isActive: newActiveState }
         });
 
         // Return fresh event data
@@ -441,13 +416,7 @@ router.post('/events/:id/releases', requireAuth, requireRole(['ORGANIZER', 'ADMI
         }
 
         const newRelease = await prisma.$transaction(async (tx) => {
-            // If activating immediately, deactivate all existing releases first
-            if (activateImmediately) {
-                await tx.ticketrelease.updateMany({
-                    where: { eventId },
-                    data: { isActive: false }
-                });
-            }
+            // (Removed single active policy: do not deactivate others)
 
             const created = await tx.ticketrelease.create({
                 data: {
@@ -788,14 +757,6 @@ router.patch('/releases/:id/toggle', requireAuth, requireRole(['ORGANIZER', 'ADM
         }
 
         const newStatus = !release.isActive;
-
-        // If activating, deactivate all others first
-        if (newStatus) {
-            await prisma.ticketrelease.updateMany({
-                where: { eventId: release.eventId, id: { not: parseInt(id) } },
-                data: { isActive: false }
-            });
-        }
 
         const updatedRelease = await prisma.ticketrelease.update({
             where: { id: parseInt(id) },

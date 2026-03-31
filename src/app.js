@@ -45,6 +45,7 @@ const adminRoutes = require('./modules/admin/admin.routes');
 const organizerRoutes = require('./modules/owner/organizer.routes');
 const tenantRoutes = require('./modules/tenant/tenant.routes');
 const publicRoutes = require('./modules/tenant/public.routes');
+const blogAdminRoutes = require('./modules/admin/blog.routes');
 
 app.get('/health', (req, res) => {
     res.json({ status: 'OK', message: 'Backend is running' });
@@ -55,6 +56,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/organizer', organizerRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/tickets', tenantRoutes);
+app.use('/api/admin/blogs', blogAdminRoutes);
 app.use('/api/payments', require('./modules/payments/payments.routes'));
 
 module.exports = app;

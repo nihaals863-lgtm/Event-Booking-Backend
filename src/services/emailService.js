@@ -106,7 +106,8 @@ async function generateTicketPDF(eventData, attendeeData, orderData, qrBase64) {
                         <div class="label" style="margin-top: 10px;">Scan at Entry</div>
                     </div>
                     <div class="footer">
-                        Powered by Event Platform • This ticket is valid for one entry only.
+                        Powered by EventHubix • This ticket is valid for one entry only.<br>
+                        For refunds, contact us at ${REPLY_TO_EMAIL}
                     </div>
                 </div>
             </body>
@@ -159,8 +160,13 @@ function getEmailLayout(content, preheader = '') {
                 <tr>
                     <td style="padding: 30px; text-align: center; background-color: #F9FAFB; border-top: 1px solid #E5E7EB;">
                         <p style="margin: 0; color: #6B7280; font-size: 14px;">© 2026 <strong>EventHubix</strong></p>
-                        <p style="margin: 8px 0 0; color: #9CA3AF; font-size: 12px;">
-                            Need help? Contact <a href="mailto:support@eventhubix.com" style="color: #4F46E5; text-decoration: none;">support@eventhubix.com</a>
+                        <p style="margin: 8px 0 0; color: #9CA3AF; font-size: 12px; line-height: 1.6;">
+                            Need help? Contact <a href="mailto:${REPLY_TO_EMAIL}" style="color: #4F46E5; text-decoration: none;">${REPLY_TO_EMAIL}</a><br>
+                            For refunds, contact us at <span style="color: #4F46E5;">${REPLY_TO_EMAIL}</span><br>
+                            <span style="font-size: 10px; opacity: 0.8; display: block; margin-top: 10px;">
+                                By using EventHubix, you agree to our <a href="https://event-ticket-platform1.netlify.app/terms-and-conditions" style="color: #4F46E5; text-decoration: underline;">Terms & Conditions</a>. 
+                                Your data is handled according to our <a href="https://event-ticket-platform1.netlify.app/privacy-policy" style="color: #4F46E5; text-decoration: underline;">Privacy Policy</a>.
+                            </span>
                         </p>
                     </td>
                 </tr>
@@ -318,6 +324,36 @@ function getAdminNotificationTemplate({ organizerName, organizerEmail, timestamp
         ${getCTAButton('Review Organizer', 'https://event-ticket-platform1.netlify.app/admin/approvals')}
     `;
     return getEmailLayout(content, `New organizer registration: ${organizerName}`);
+}
+
+/**
+ * Template: Newsletter Welcome
+ */
+function getNewsletterWelcomeTemplate(email) {
+    const content = `
+        <h2 style="margin: 0 0 15px; color: #111827; font-size: 24px; text-align: center;">Welcome to the Loop! 🚀</h2>
+        <p style="margin: 0 0 25px; color: #4B5563; font-size: 16px; text-align: center; line-height: 1.6;">
+            Thanks for subscribing to the <strong>EventHubix</strong> newsletter. You're now officially in the inner circle!
+        </p>
+        
+        <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 12px; padding: 25px; margin-bottom: 30px;">
+            <p style="margin: 0; color: #4B5563; font-size: 15px; line-height: 1.6;">
+                Get ready for:
+                <ul style="margin: 15px 0 0; padding-left: 20px; color: #4B5563;">
+                    <li style="margin-bottom: 8px;">Exclusive event marketing tips</li>
+                    <li style="margin-bottom: 8px;">Early access to new features</li>
+                    <li style="margin-bottom: 8px;">Industry news and trends</li>
+                </ul>
+            </p>
+        </div>
+
+        <p style="margin: 0 0 20px; color: #6B7280; font-size: 14px; text-align: center;">
+            You are receiving this because you subscribed at <span style="color: #4F46E5;">eventhubix.com</span>
+        </p>
+
+        ${getCTAButton('Explore Events', 'https://event-ticket-platform1.netlify.app/events')}
+    `;
+    return getEmailLayout(content, "You're now subscribed to EventHubix!");
 }
 
 /**
@@ -481,6 +517,20 @@ async function sendAdminNewOrganizerAlert(organizerData) {
 }
 
 /**
+ * Send newsletter welcome email.
+ */
+async function sendNewsletterWelcome(email) {
+    const htmlTemplate = getNewsletterWelcomeTemplate(email);
+    const msg = {
+        to: email,
+        subject: `Welcome to EventHubix! 🚀`,
+        text: `Thanks for subscribing to the EventHubix newsletter! We'll keep you updated with the latest event tips and news.`,
+        html: htmlTemplate,
+    };
+    await sendEmailRaw(msg, 'newsletter_welcome');
+}
+
+/**
  * Orchestrator for purchase-related emails (fire-and-forget).
  */
 function processPurchaseEmails({ attendeeEmail, attendeeName, orderId, totalAmount, eventTitle, eventDate, location, organizerEmail, tickets }) {
@@ -505,5 +555,6 @@ module.exports = {
     sendTicketConfirmation,
     sendOrganizerSaleNotification,
     sendAdminNewOrganizerAlert,
+    sendNewsletterWelcome,
     processPurchaseEmails
 };

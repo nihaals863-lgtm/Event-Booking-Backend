@@ -252,6 +252,27 @@ enum payout_status {
   PAID
 }
 
+model blog {
+  id               Int          @id @default(autoincrement())
+  title            String
+  slug             String       @unique
+  featuredImage    String?
+  shortDescription String       @db.Text
+  content          String       @db.LongText
+  authorName       String
+  status           blog_status  @default(DRAFT)
+  metaTitle        String?
+  metaDescription  String?      @db.Text
+  publishedAt      DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+}
+
+enum blog_status {
+  DRAFT
+  PUBLISHED
+}
+
 model payout {
   id                  Int           @id @default(autoincrement())
   organizerId         Int
@@ -265,4 +286,10 @@ model payout {
   organizer           user          @relation(fields: [organizerId], references: [id], map: "Payout_organizerId_fkey")
 
   @@index([organizerId], map: "Payout_organizerId_fkey")
+}
+
+model newsletter {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  createdAt DateTime @default(now())
 }

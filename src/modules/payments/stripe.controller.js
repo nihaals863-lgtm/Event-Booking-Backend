@@ -6,7 +6,7 @@ const crypto = require('crypto');
  * Initiate a checkout session with atomic ticket locking
  */
 const createCheckoutSession = async (req, res) => {
-    const { eventId, quantity, attendeeName, attendeeEmail, ticketReleaseId } = req.body;
+    const { eventId, quantity, attendeeName, attendeeEmail, ticketReleaseId, promoCode } = req.body;
     const userId = req.user?.id || null;
 
     if (!eventId || !quantity || !attendeeName || !attendeeEmail) {
@@ -18,7 +18,7 @@ const createCheckoutSession = async (req, res) => {
         const ticketReleaseIdInt = ticketReleaseId ? parseInt(ticketReleaseId) : null;
         const qtyInt = parseInt(quantity);
 
-        // ATOMIC TRANSACTION: Phase 1 (Reserve Capacity)
+        // ATOMIC TRANSACTION: Phase 1 (Reserve Capacity & Validate Promo)
         const result = await prisma.$transaction(async (tx) => {
             const event = await tx.event.findUnique({
                 where: { id: eventIdInt },
@@ -57,9 +57,48 @@ const createCheckoutSession = async (req, res) => {
             // Calculation Logic
             const unitPrice = release ? release.price : event.ticketPrice;
             const subtotal = unitPrice * qtyInt;
+            
+            // Promo Code Logic
+            let discountValue = 0;
+            let appliedPromoId = null;
+            if (promoCode) {
+                const promo = await tx.promocode.findFirst({
+                    where: { 
+                        eventId: eventIdInt, 
+                        code: promoCode.toUpperCase() 
+                    }
+                });
+
+                if (!promo) {
+                    throw new Error('Invalid promo code');
+                }
+
+                // Validate Expiry
+                if (promo.expiresAt && new Date() > promo.expiresAt) {
+                    throw new Error('Promo code has expired');
+                }
+
+                // Validate Usage
+                if (promo.maxUsage > 0 && promo.currentUsage >= promo.maxUsage) {
+                    throw new Error('Promo code usage limit reached');
+                }
+
+                // Calculate Discount
+                if (promo.discountType === 'PERCENTAGE') {
+                    discountValue = (subtotal * promo.discountValue) / 100;
+                } else if (promo.discountType === 'FIXED') {
+                    discountValue = promo.discountValue;
+                }
+                
+                appliedPromoId = promo.id;
+                console.log(`[PROMO_APPLIED] code=${promoCode} discount=${discountValue}`);
+            }
+
             const settings = await tx.platformsettings.findFirst() || { platformFeeRate: 0.015, platformFeeFixed: 0.30, platformFeeFixedCents: 30 };
             const fee = (unitPrice === 0 || event.serviceFeeType !== 'BUYER') ? 0 : parseFloat(((subtotal * settings.platformFeeRate) + (settings.platformFeeFixed * qtyInt)).toFixed(2));
-            const finalTotal = subtotal + fee;
+            
+            // Apply discount to the final total (Ensure it doesn't go below 0)
+            const finalTotal = Math.max(0, (subtotal - discountValue) + fee);
             
             // DUAL-WRITE: Calculate cents for future migration
             const finalTotalCents = Math.round(finalTotal * 100);
@@ -81,12 +120,18 @@ const createCheckoutSession = async (req, res) => {
                     userId: userId,
                     paymentStatus: 'PENDING',
                     expiresAt,
-                    status: 'PENDING'
+                    status: 'PENDING',
+                    statusDetail: appliedPromoId ? `PROMO_APPLIED:${promoCode}` : 'NORMAL'
                 }
             });
 
             console.log(`[PAYMENT_LOCKED] orderId=${orderId} qty=${qtyInt} expires=${expiresAt.toISOString()}`);
-            return { order, eventTitle: event.title, ticketName: release ? release.name : 'General Admission' };
+            return { 
+                order, 
+                eventTitle: event.title, 
+                ticketName: release ? release.name : 'General Admission',
+                appliedPromoId
+            };
         });
 
         // External Call: Phase 2 (Stripe Session)
@@ -94,7 +139,7 @@ const createCheckoutSession = async (req, res) => {
             orderId: result.order.id,
             eventTitle: result.eventTitle,
             ticketName: result.ticketName,
-            quantity: 1, // Fix: amountCents is ALREADY (unit_price * qty + fees). Do not multiply again.
+            quantity: 1, 
             price: result.order.amountCents,
             customerEmail: attendeeEmail,
             mode: 'payment',
@@ -102,21 +147,11 @@ const createCheckoutSession = async (req, res) => {
                 eventId: eventId.toString(),
                 ticketReleaseId: ticketReleaseId ? ticketReleaseId.toString() : 'null',
                 userId: userId ? userId.toString() : 'null',
+                promoCodeId: result.appliedPromoId ? result.appliedPromoId.toString() : 'null',
                 quantity: quantity.toString(),
                 amountCents: result.order.amountCents.toString(),
                 orderId: result.order.id
-            },
-            payment_intent_data: {
-                metadata: {
-                    eventId: eventId.toString(),
-                    ticketReleaseId: ticketReleaseId ? ticketReleaseId.toString() : 'null',
-                    userId: userId ? userId.toString() : 'null',
-                    quantity: quantity.toString(),
-                    amountCents: result.order.amountCents.toString(),
-                    orderId: result.order.id
-                }
-            },
-            success_url: `${process.env.FRONTEND_URL}/order-success?session_id={CHECKOUT_SESSION_ID}&order_id=${result.order.id}`,
+            }
         });
 
         // Link Session & Update Status to PAYMENT_PENDING
@@ -129,7 +164,6 @@ const createCheckoutSession = async (req, res) => {
         });
 
         console.log(`[PAYMENT_SESSION_CREATED] orderId=${result.order.id} sessionId=${session.id}`);
-        console.log(`[PAYMENT_PENDING] orderId=${result.order.id}`);
         res.json({ checkoutUrl: session.url, orderId: result.order.id });
 
     } catch (error) {
