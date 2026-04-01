@@ -119,6 +119,7 @@ const createCheckoutSession = async (req, res) => {
                     customerName: attendeeName,
                     userId: userId,
                     paymentStatus: 'PENDING',
+                    currency: (process.env.STRIPE_CURRENCY || 'AUD').toUpperCase(),
                     expiresAt,
                     status: 'PENDING',
                     statusDetail: appliedPromoId ? `PROMO_APPLIED:${promoCode}` : 'NORMAL'
