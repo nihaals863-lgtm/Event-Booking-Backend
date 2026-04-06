@@ -173,9 +173,11 @@ model user {
   password                       String
   role                           user_role        @default(TENANT)
   status                         user_status      @default(ACTIVE)
+  mobile                         String?
   organizerStatus                organizer_status @default(PENDING)
   businessName                   String?
   abn                            String?
+  businessAddress                String?
   bankAccountName                String?
   bsb                            String?
   accountNumber                  String?
@@ -200,6 +202,16 @@ model platformsettings {
 model settings {
   key   String @id @db.VarChar(100)
   value String @db.Text
+}
+
+model faq {
+  id        Int      @id @default(autoincrement())
+  category  String
+  question  String   @db.Text
+  answer    String   @db.Text
+  orderIndex Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 enum promocode_discountType {

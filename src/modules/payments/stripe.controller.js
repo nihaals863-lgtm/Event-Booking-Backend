@@ -135,6 +135,9 @@ const createCheckoutSession = async (req, res) => {
             };
         });
 
+        // Dynamically resolve frontend URL based on request origin
+        const requestOrigin = req.headers.origin || process.env.FRONTEND_URL || 'http://localhost:5173';
+
         // External Call: Phase 2 (Stripe Session)
         const session = await stripeService.createCheckoutSession({
             orderId: result.order.id,
@@ -144,6 +147,7 @@ const createCheckoutSession = async (req, res) => {
             price: result.order.amountCents,
             customerEmail: attendeeEmail,
             mode: 'payment',
+            frontendUrl: requestOrigin,
             metadata: {
                 eventId: eventId.toString(),
                 ticketReleaseId: ticketReleaseId ? ticketReleaseId.toString() : 'null',

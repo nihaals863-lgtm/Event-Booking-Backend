@@ -23,8 +23,8 @@ router.get('/events/moderation-stats', requireAuth, requireRole(['ADMIN']), asyn
             prisma.event.count({ where: { status: 'APPROVED' } })
         ]);
 
-        const approvalRate = totalReviewed > 0 
-            ? Math.round((approvedCount / totalReviewed) * 100) 
+        const approvalRate = totalReviewed > 0
+            ? Math.round((approvedCount / totalReviewed) * 100)
             : 0;
 
         res.json({
@@ -139,7 +139,7 @@ router.get('/events/:id', requireAuth, requireRole(['ADMIN']), async (req, res) 
             where: { id: id },
             include: {
                 user_event_organizerIdTouser: {
-                    select: { name: true, email: true }
+                    select: { name: true, email: true, mobile: true }
                 },
                 user_event_reviewedByIdTouser: {
                     select: { name: true }
@@ -173,10 +173,10 @@ router.get('/dashboard', requireAuth, requireRole(['ADMIN']), async (req, res) =
         const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
 
         const [
-            totalEvents, 
-            pendingEvents, 
-            totalUsers, 
-            totalTickets, 
+            totalEvents,
+            pendingEvents,
+            totalUsers,
+            totalTickets,
             recentEvents,
             eventsLastMonth,
             usersLastMonth,
@@ -219,12 +219,12 @@ router.get('/dashboard', requireAuth, requireRole(['ADMIN']), async (req, res) =
             return sum + fee;
         }, 0);
         const netRevenue = totalRevenue - platformRevenue;
-        
+
         // Calculate Growth Percentages
-        const eventGrowth = totalEvents > eventsLastMonth 
-            ? Math.round(((totalEvents - (totalEvents - eventsLastMonth)) / (totalEvents - eventsLastMonth || 1)) * 100) 
+        const eventGrowth = totalEvents > eventsLastMonth
+            ? Math.round(((totalEvents - (totalEvents - eventsLastMonth)) / (totalEvents - eventsLastMonth || 1)) * 100)
             : 0;
-            
+
         const userGrowth = totalUsers > usersLastMonth
             ? Math.round(((totalUsers - (totalUsers - usersLastMonth)) / (totalUsers - usersLastMonth || 1)) * 100)
             : 0;
@@ -334,8 +334,17 @@ router.get('/users', requireAuth, requireRole(['ADMIN']), async (req, res) => {
                 email: true,
                 role: true,
                 status: true,
+                mobile: true,
+                organizerStatus: true,
+                businessName: true,
+                abn: true,
+                businessAddress: true,
+                bankAccountName: true,
+                bsb: true,
+                accountNumber: true,
                 isVerified: true,
-                createdAt: true
+                createdAt: true,
+                updatedAt: true
             },
             orderBy: { createdAt: 'desc' }
         });
@@ -441,6 +450,7 @@ router.get('/organizer-requests', requireAuth, requireRole(['ADMIN']), async (re
                 email: true,
                 organizerStatus: true,
                 status: true,
+                mobile: true,
                 createdAt: true
             },
             orderBy: { createdAt: 'desc' }
@@ -516,7 +526,7 @@ router.get('/settings', requireAuth, requireRole(['ADMIN']), async (req, res) =>
  */
 router.patch('/settings', requireAuth, requireRole(['ADMIN']), async (req, res) => {
     const { currency, platformFeeRate, platformFeeFixed } = req.body;
-    
+
     const updateData = {};
     if (currency) {
         const SUPPORTED = ['AUD', 'USD', 'INR', 'EUR', 'GBP', 'SGD', 'NZD', 'CAD'];
@@ -566,6 +576,7 @@ router.get('/organizers', requireAuth, requireRole(['ADMIN']), async (req, res) 
                 id: true,
                 name: true,
                 email: true,
+                mobile: true,
                 organizerStatus: true,
                 isVerified: true,
                 businessName: true,
@@ -581,9 +592,9 @@ router.get('/organizers', requireAuth, requireRole(['ADMIN']), async (req, res) 
                     include: {
                         purchaseorder: {
                             where: { paymentStatus: 'SUCCESS' },
-                            select: { 
+                            select: {
                                 amountPaidCents: true,
-                                refundedAmount: true 
+                                refundedAmount: true
                             }
                         }
                     }
@@ -613,6 +624,7 @@ router.get('/organizers', requireAuth, requireRole(['ADMIN']), async (req, res) 
                 id: org.id,
                 name: org.name,
                 email: org.email,
+                mobile: org.mobile,
                 businessName: org.businessName,
                 abn: org.abn,
                 bankDetails: {
@@ -630,6 +642,7 @@ router.get('/organizers', requireAuth, requireRole(['ADMIN']), async (req, res) 
                 },
                 hasPendingPayout: pendingPayoutCount > 0,
                 payoutHistory: org.payout,
+                events: org.event_event_organizerIdTouser, // <--- Include events
                 isVerified: org.isVerified,
                 createdAt: org.createdAt
             };
@@ -757,6 +770,101 @@ router.patch('/payouts/:id/status', requireAuth, requireRole(['ADMIN']), async (
         res.json(updatedPayout);
     } catch (error) {
         console.error('Update payout status error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * @route POST /api/admin/settings
+ * @desc  Update a platform setting (privacy_policy, terms, etc.)
+ */
+router.post('/settings', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+    const { key, value } = req.body;
+    
+    if (!key) {
+        return res.status(400).json({ error: 'Key is required' });
+    }
+    
+    try {
+        const setting = await prisma.settings.upsert({
+            where: { key },
+            update: { value },
+            create: { key, value }
+        });
+        
+        res.json(setting);
+    } catch (error) {
+        console.error('Update settings error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * @route POST /api/admin/faqs
+ * @desc  Create a new FAQ
+ */
+router.post('/faqs', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+    const { category, question, answer, orderIndex } = req.body;
+    
+    try {
+        const faq = await prisma.faq.create({
+            data: { 
+                category, 
+                question, 
+                answer, 
+                orderIndex: orderIndex || 0 
+            }
+        });
+        
+        res.json(faq);
+    } catch (error) {
+        console.error('Create FAQ error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * @route PUT /api/admin/faqs/:id
+ * @desc  Update an existing FAQ
+ */
+router.put('/faqs/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+    const { id } = req.params;
+    const { category, question, answer, orderIndex } = req.body;
+    
+    try {
+        const faqIdx = parseInt(id);
+        const faq = await prisma.faq.update({
+            where: { id: faqIdx },
+            data: { 
+                category, 
+                question, 
+                answer, 
+                orderIndex: orderIndex !== undefined ? orderIndex : undefined 
+            }
+        });
+        
+        res.json(faq);
+    } catch (error) {
+        console.error('Update FAQ error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * @route DELETE /api/admin/faqs/:id
+ * @desc  Delete an FAQ
+ */
+router.delete('/faqs/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+    const { id } = req.params;
+    
+    try {
+        await prisma.faq.delete({
+            where: { id: parseInt(id) }
+        });
+        
+        res.json({ message: 'FAQ deleted successfully' });
+    } catch (error) {
+        console.error('Delete FAQ error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });

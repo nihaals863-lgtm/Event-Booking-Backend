@@ -5,7 +5,7 @@ const { requireAuth, requireRole } = require('../../middlewares/authMiddleware')
 const router = express.Router();
 
 /**
- * @route POST /api/organizer/events
+ * @route POST /api/organiser/events
  * @desc  Create a new event
  */
 router.post('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
@@ -96,8 +96,8 @@ router.post('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
 });
 
 /**
- * @route GET /api/organizer/events
- * @desc  Get events created by the logged in organizer
+ * @route GET /api/organiser/events
+ * @desc  Get events created by the logged in organiser
  */
 router.get('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
     try {
@@ -111,13 +111,13 @@ router.get('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (r
         });
         res.json(events);
     } catch (error) {
-        console.error('Error fetching organizer events:', error);
+        console.error('Error fetching organiser events:', error);
         res.status(500).json({ error: 'Unable to retrieve your events. Please refresh the page.' });
     }
 });
 
 /**
- * @route GET /api/organizer/events/:id
+ * @route GET /api/organiser/events/:id
  * @desc  Get single event details for editing
  */
 router.get('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
@@ -157,7 +157,7 @@ router.get('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), asyn
 });
 
 /**
- * @route PATCH /api/organizer/events/:id
+ * @route PATCH /api/organiser/events/:id
  * @desc  Update an event's details
  */
 router.patch('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
@@ -294,7 +294,7 @@ router.patch('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), as
 });
 
 /**
- * @route PATCH /api/organizer/releases/:id/toggle
+ * @route PATCH /api/organiser/releases/:id/toggle
  * @desc  Activate or deactivate a ticket release (single-active enforcement)
  */
 router.patch('/releases/:id/toggle', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
@@ -335,7 +335,7 @@ router.patch('/releases/:id/toggle', requireAuth, requireRole(['ORGANIZER', 'ADM
 });
 
 /**
- * @route PATCH /api/organizer/releases/:id
+ * @route PATCH /api/organiser/releases/:id
  * @desc  Edit a ticket release (name, qty, dates — price locked if sold > 0)
  */
 router.patch('/releases/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
@@ -392,7 +392,7 @@ router.patch('/releases/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), 
 });
 
 /**
- * @route POST /api/organizer/events/:id/releases
+ * @route POST /api/organiser/events/:id/releases
  * @desc  Add a new ticket release to an existing MULTI event
  */
 router.post('/events/:id/releases', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
@@ -448,7 +448,7 @@ router.post('/events/:id/releases', requireAuth, requireRole(['ORGANIZER', 'ADMI
 });
 
 /**
- * @route DELETE /api/organizer/releases/:id
+ * @route DELETE /api/organiser/releases/:id
  * @desc  Delete a ticket release (blocked if any tickets sold)
  */
 router.delete('/releases/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
@@ -484,8 +484,8 @@ router.delete('/releases/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']),
 });
 
 /**
- * @route GET /api/organizer/reports
- * @desc  Get sales reports for the organizer's events
+ * @route GET /api/organiser/reports
+ * @desc  Get sales reports for the organiser's events
  */
 router.get('/reports', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
     try {
@@ -507,7 +507,7 @@ router.get('/reports', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
             acc.totalGross += gross;
             acc.totalFees += platformFee;
 
-            // If organizer covers fee, net is gross - fee. If buyer covers, net is full ticket price.
+            // If organiser covers fee, net is gross - fee. If buyer covers, net is full ticket price.
             const net = event.serviceFeeType === 'ORGANIZER' ? (gross - platformFee) : gross;
             acc.totalNet += net;
 
@@ -576,7 +576,7 @@ router.get('/reports', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
 });
 
 /**
- * @route GET /api/organizer/events/:id/promos
+ * @route GET /api/organiser/events/:id/promos
  * @desc  Get all promo codes for an event
  */
 router.get('/events/:id/promos', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
@@ -599,7 +599,7 @@ router.get('/events/:id/promos', requireAuth, requireRole(['ORGANIZER', 'ADMIN']
 });
 
 /**
- * @route POST /api/organizer/events/:id/promos
+ * @route POST /api/organiser/events/:id/promos
  * @desc  Create a promo code for an event
  */
 router.post('/events/:id/promos', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
@@ -635,7 +635,7 @@ router.post('/events/:id/promos', requireAuth, requireRole(['ORGANIZER', 'ADMIN'
 });
 
 /**
- * @route DELETE /api/organizer/events/:eventId/promos/:promoId
+ * @route DELETE /api/organiser/events/:eventId/promos/:promoId
  * @desc  Delete a promo code
  */
 router.delete('/events/:eventId/promos/:promoId', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
@@ -655,7 +655,7 @@ router.delete('/events/:eventId/promos/:promoId', requireAuth, requireRole(['ORG
 });
 
 /**
- * @route GET /api/organizer/events/:id/scanner-stats
+ * @route GET /api/organiser/events/:id/scanner-stats
  * @desc  Get live stats for ticket scanning
  */
 router.get('/events/:id/scanner-stats', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
@@ -710,7 +710,7 @@ router.get('/events/:id/scanner-stats', requireAuth, requireRole(['ORGANIZER', '
 });
 
 /**
- * @route GET /api/organizer/events/:id/attendees
+ * @route GET /api/organiser/events/:id/attendees
  * @desc  Get attendee list for an event
  */
 router.get('/events/:id/attendees', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
@@ -740,7 +740,7 @@ router.get('/events/:id/attendees', requireAuth, requireRole(['ORGANIZER', 'ADMI
 });
 
 /**
- * @route PATCH /api/organizer/releases/:id/toggle
+ * @route PATCH /api/organiser/releases/:id/toggle
  * @desc  Toggle activation of a ticket release
  */
 router.patch('/releases/:id/toggle', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {

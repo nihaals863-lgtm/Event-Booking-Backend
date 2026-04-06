@@ -8,17 +8,17 @@ const stripeService = {
      * Create a Stripe Checkout Session
      * @param {Object} data - session data
      */
-    async createCheckoutSession({ orderId, eventTitle, ticketName, quantity, price, customerEmail, metadata }) {
+    async createCheckoutSession({ orderId, eventTitle, ticketName, quantity, price, customerEmail, metadata, frontendUrl }) {
         if (!process.env.STRIPE_SECRET_KEY) {
             throw new Error('STRIPE_SECRET_KEY is not configured in environment variables.');
         }
 
-        // Robust URL resolution
-        const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-        const successUrl = `${frontendUrl}/order-success?session_id={CHECKOUT_SESSION_ID}&order_id=${orderId}`;
+        // Robust URL resolution: Use dynamic origin if provided, else fallback to ENV
+        const baseTarget = (frontendUrl || process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+        const successUrl = `${baseTarget}/order-success?session_id={CHECKOUT_SESSION_ID}&order_id=${orderId}`;
         const cancelUrl = metadata.eventId 
-            ? `${frontendUrl}/events/${metadata.eventId}`
-            : `${frontendUrl}/home`;
+            ? `${baseTarget}/events/${metadata.eventId}`
+            : `${baseTarget}/home`;
 
         console.log(`[STRIPE_SESSION_CREATE] orderId=${orderId} successUrl=${successUrl} cancelUrl=${cancelUrl}`);
 

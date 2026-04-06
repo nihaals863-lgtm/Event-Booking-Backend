@@ -491,4 +491,60 @@ router.post('/newsletter/subscribe', async (req, res) => {
     }
 });
 
+/**
+ * @route GET /api/public/legal/:key
+ * @desc  Get a legal setting by key (privacy_policy, terms_and_conditions, etc.)
+ */
+router.get('/legal/:key', async (req, res) => {
+    try {
+        const { key } = req.params;
+        const setting = await prisma.settings.findUnique({
+            where: { key }
+        });
+        
+        if (!setting) {
+            return res.status(404).json({ error: 'Legal content not found' });
+        }
+        
+        res.json(setting);
+    } catch (error) {
+        console.error('Error fetching legal content:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * @route GET /api/public/faqs
+ * @desc  Get all FAQs grouped by category
+ */
+router.get('/faqs', async (req, res) => {
+    try {
+        const faqs = await prisma.faq.findMany({
+            orderBy: [
+                { category: 'asc' },
+                { orderIndex: 'asc' }
+            ]
+        });
+        
+        // Group by category for easier frontend handling
+        const grouped = faqs.reduce((acc, faq) => {
+            const existingCat = acc.find(cat => cat.category === faq.category);
+            if (existingCat) {
+                existingCat.items.push(faq);
+            } else {
+                acc.push({
+                    category: faq.category,
+                    items: [faq]
+                });
+            }
+            return acc;
+        }, []);
+        
+        res.json(grouped);
+    } catch (error) {
+        console.error('Error fetching public FAQs:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 module.exports = router;

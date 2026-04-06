@@ -10,6 +10,7 @@ if (process.env.SENDGRID_API_KEY) {
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL;
 const REPLY_TO_EMAIL = process.env.SENDGRID_REPLY_TO_EMAIL || process.env.ADMIN_EMAIL;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 
 // Puppeteer Singleton Browser Manager
 let browserInstance = null;
@@ -63,53 +64,57 @@ async function generateQRCode(payload, orderId = 'N/A') {
 /**
  * Generate a minimalist PDF ticket
  */
-async function generateTicketPDF(eventData, attendeeData, orderData, qrBase64) {
+async function generateTicketPDF(eventData, attendeeData, orderData, qrCodes) {
     let page = null;
     try {
         const browser = await getBrowser();
         page = await browser.newPage();
+
+        const ticketsHtml = qrCodes.map((qr, index) => `
+            <div class="ticket" style="${index < qrCodes.length - 1 ? 'page-break-after: always;' : ''}">
+                <div class="header">
+                    <div class="label">Event Ticket - ${index + 1} of ${qrCodes.length}</div>
+                    <div class="event-name">${eventData.title}</div>
+                </div>
+                <div class="details">
+                    <div style="float: left; width: 50%;">
+                        <p><span class="label">Attendee</span><br><strong>${attendeeData.name}</strong></p>
+                        <p><span class="label">Order ID</span><br>${orderData.id}</p>
+                    </div>
+                    <div style="float: left; width: 50%;">
+                        <p><span class="label">Amount Paid</span><br>${orderData.amount}</p>
+                    </div>
+                    <div style="clear: both;"></div>
+                </div>
+                <div class="qr-section">
+                    <img class="qr-image" src="${qr}" />
+                    <div class="label" style="margin-top: 10px;">Scan at Entry</div>
+                </div>
+                <div class="footer">
+                    Powered by EventHubix • This ticket is valid for one entry only.<br>
+                    For refunds, contact us at ${REPLY_TO_EMAIL}
+                </div>
+            </div>
+        `).join('');
 
         const htmlContent = `
             <!DOCTYPE html>
             <html>
             <head>
                 <style>
-                    body { font-family: 'Helvetica', sans-serif; margin: 40px; color: #333; }
-                    .ticket { border: 2px solid #EEE; padding: 20px; max-width: 600px; margin: auto; border-radius: 8px; }
+                    body { font-family: 'Helvetica', sans-serif; margin: 0; color: #333; }
+                    .ticket { border: 2px solid #EEE; padding: 40px; max-width: 600px; margin: 40px auto; border-radius: 8px; }
                     .header { text-align: center; border-bottom: 2px solid #F5F5F5; padding-bottom: 20px; }
                     .event-name { font-size: 24px; font-weight: bold; margin: 10px 0; color: #1A1A1A; }
                     .details { margin: 20px 0; font-size: 14px; line-height: 1.6; }
                     .label { color: #888; text-transform: uppercase; font-size: 10px; font-weight: bold; letter-spacing: 1px; }
                     .qr-section { text-align: center; margin-top: 30px; }
-                    .qr-image { width: 140px; height: 140px; border: 1px solid #EEE; padding: 10px; border-radius: 4px; }
+                    .qr-image { width: 180px; height: 180px; border: 1px solid #EEE; padding: 10px; border-radius: 4px; }
                     .footer { text-align: center; font-size: 10px; color: #AAA; margin-top: 40px; border-top: 1px solid #F5F5F5; padding-top: 15px; }
                 </style>
             </head>
             <body>
-                <div class="ticket">
-                    <div class="header">
-                        <div class="label">Event Ticket</div>
-                        <div class="event-name">${eventData.title}</div>
-                    </div>
-                    <div class="details">
-                        <div style="float: left; width: 50%;">
-                            <p><span class="label">Attendee</span><br><strong>${attendeeData.name}</strong></p>
-                            <p><span class="label">Order ID</span><br>${orderData.id}</p>
-                        </div>
-                        <div style="float: left; width: 50%;">
-                            <p><span class="label">Amount Paid</span><br>${orderData.amount}</p>
-                        </div>
-                        <div style="clear: both;"></div>
-                    </div>
-                    <div class="qr-section">
-                        <img class="qr-image" src="${qrBase64}" />
-                        <div class="label" style="margin-top: 10px;">Scan at Entry</div>
-                    </div>
-                    <div class="footer">
-                        Powered by EventHubix • This ticket is valid for one entry only.<br>
-                        For refunds, contact us at ${REPLY_TO_EMAIL}
-                    </div>
-                </div>
+                ${ticketsHtml}
             </body>
             </html>
         `;
@@ -173,8 +178,8 @@ function getEmailLayout(content, preheader = '') {
                                 <p style="margin: 0;">Need any assistance? Connect with our <a href="mailto:${REPLY_TO_EMAIL}" style="color: #4F46E5; text-decoration: none; font-weight: 600;">Support Team</a></p>
                                 <p style="margin: 15px 0 0; font-size: 11px; color: #cbd5e1; max-width: 400px; margin-left: auto; margin-right: auto;">
                                     This email was sent regarding your order. By using our platform, you agree to our 
-                                    <a href="https://event-ticket-platform1.netlify.app/terms-and-conditions" style="color: #94a3b8; text-decoration: underline;">Terms</a> and 
-                                    <a href="https://event-ticket-platform1.netlify.app/privacy-policy" style="color: #94a3b8; text-decoration: underline;">Privacy Policy</a>.
+                                    <a href="${FRONTEND_URL}/terms" style="color: #94a3b8; text-decoration: underline;">Terms</a> and 
+                                    <a href="${FRONTEND_URL}/privacy" style="color: #94a3b8; text-decoration: underline;">Privacy Policy</a>.
                                 </p>
                             </div>
                         </td>
@@ -208,10 +213,17 @@ function getCTAButton(text, url) {
 /**
  * Template: Ticket Confirmation (Buyer)
  */
-function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, location, orderId, amount, ticketsCount, qrBase64 }) {
+function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, location, orderId, amount, ticketsCount, qrCodes }) {
     const formattedDate = (eventDate instanceof Date) 
         ? eventDate.toLocaleString('en-AU', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
         : (eventDate || 'Coming Soon');
+
+    const qrSections = (qrCodes || []).map((_, index) => `
+        <div style="display: inline-block; width: 220px; vertical-align: top; margin: 15px; padding: 25px; background-color: #FFFFFF; border: 1.5px solid #F1F5F9; border-radius: 20px; text-align: center;">
+            <img src="cid:ticket_qr_${index}" width="160" height="160" style="display: block; margin: 0 auto; border-radius: 12px; border: 1px solid #F1F5F9; padding: 8px; background-color: white;" alt="Ticket QR Code ${index + 1}" />
+            <p style="margin: 15px 0 0; color: #64748B; font-size: 10px; text-transform: uppercase; font-weight: 800; letter-spacing: 0.1em;">Pass ${index + 1} of ${ticketsCount}</p>
+        </div>
+    `).join('');
 
     const content = `
         <div style="text-align: center; margin-bottom: 35px;">
@@ -219,7 +231,7 @@ function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, lo
                 <span style="color: #0284C7; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.15em;">Booking Confirmed</span>
             </div>
             <h2 style="margin: 0; color: #0F172A; font-size: 32px; font-weight: 800; letter-spacing: -1px; line-height: 1.1;">You're going to <br/><span style="color: #4F46E5;">${eventTitle}</span></h2>
-            <p style="margin: 15px 0 0; color: #64748B; font-size: 17px; line-height: 1.6;">Hi ${attendeeName}, we've secured your spot! Your digital pass is ready below.</p>
+            <p style="margin: 15px 0 0; color: #64748B; font-size: 17px; line-height: 1.6;">Hi ${attendeeName}, we've secured your spots! Your digital passes are ready below.</p>
         </div>
         
         <div style="background-color: #FFFFFF; border: 1.5px solid #F1F5F9; border-radius: 28px; padding: 35px; margin-bottom: 35px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02);">
@@ -260,18 +272,17 @@ function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, lo
             </table>
         </div>
 
-        ${qrBase64 ? `
-        <div style="text-align: center; padding: 40px 20px; background-color: #F8FAFC; border-radius: 28px; margin: 35px 0; border: 2px dashed #E2E8F0;">
-            <img src="cid:ticket_qr" width="180" height="180" style="display: block; margin: 0 auto; border-radius: 12px; border: 1px solid #E2E8F0; padding: 10px; background-color: white;" alt="Ticket QR Code" />
-            <p style="margin: 25px 0 0; color: #64748B; font-size: 11px; text-transform: uppercase; font-weight: 800; letter-spacing: 0.2em;">Scan this at entry</p>
-            <p style="margin: 10px 0 0; color: #94A3B8; font-size: 13px; font-weight: 500;">A PDF copy is also attached to this email.</p>
+        ${qrCodes && qrCodes.length > 0 ? `
+        <div style="text-align: center; padding: 20px; background-color: #F8FAFC; border-radius: 28px; margin: 35px 0; border: 2px dashed #E2E8F0;">
+            ${qrSections}
+            <p style="margin: 10px 0 0; color: #94A3B8; font-size: 13px; font-weight: 500;">A consolidated PDF with all tickets is attached to this email.</p>
         </div>
         ` : ''}
 
-        ${getCTAButton('View My Tickets', 'https://eventhubix.com/tickets')}
+        ${getCTAButton('View My Tickets', `${FRONTEND_URL}/order-tickets`)}
         
         <p style="text-align: center; color: #94A3B8; font-size: 13px; margin-top: 20px;">
-            Need a refund? Check out our <a href="https://eventhubix.com/terms-and-conditions" style="color: #4F46E5; text-decoration: none;">refund policy</a> or reply to this email.
+            Need a refund? Check out our <a href="${FRONTEND_URL}/terms" style="color: #4F46E5; text-decoration: none;">refund policy</a> or reply to this email.
         </p>
     `;
     return getEmailLayout(content, `You're going to ${eventTitle}! Checkout your tickets.`);
@@ -319,7 +330,7 @@ function getOrganizerNotificationTemplate({ organizerName, eventTitle, quantity,
             </div>
         </div>
 
-        ${getCTAButton('View Analytics Dashboard', 'https://event-ticket-platform1.netlify.app/organizer/dashboard')}
+        ${getCTAButton('View Analytics Dashboard', `${FRONTEND_URL}/organiser/dashboard`)}
         
         <p style="text-align: center; color: #94A3B8; font-size: 13px; margin-top: 20px;">
             This notification was sent by EventHubix Platform. <br/>You can manage your notification preferences in your dashboard settings.
@@ -365,7 +376,7 @@ function getAdminNotificationTemplate({ organizerName, organizerEmail, timestamp
             </table>
         </div>
 
-        ${getCTAButton('Review & Approve Submission', 'https://event-ticket-platform1.netlify.app/admin/approvals')}
+        ${getCTAButton('Review & Approve Submission', `${FRONTEND_URL}/admin/organiser-requests`)}
         
         <p style="text-align: center; color: #94A3B8; font-size: 12px; margin-top: 30px; letter-spacing: 0.05em; text-transform: uppercase;">
             Admin Governance • EventHubix Internal Notification
@@ -396,10 +407,10 @@ function getNewsletterWelcomeTemplate(email) {
         </div>
 
         <p style="margin: 0 0 20px; color: #6B7280; font-size: 14px; text-align: center;">
-            You are receiving this because you subscribed at <span style="color: #4F46E5;">eventhubix.com</span>
+            You are receiving this because you subscribed at <span style="color: #4F46E5;">${FRONTEND_URL.replace(/https?:\/\//, '')}</span>
         </p>
 
-        ${getCTAButton('Explore Events', 'https://event-ticket-platform1.netlify.app/events')}
+        ${getCTAButton('Explore Events', `${FRONTEND_URL}/events`)}
     `;
     return getEmailLayout(content, "You're now subscribed to EventHubix!");
 }
@@ -446,52 +457,63 @@ async function sendEmailRaw(msg, logType = 'unknown', orderId = 'N/A') {
  * Send ticket confirmation to the attendee.
  */
 async function sendTicketConfirmation(attendeeData, orderData, tickets) {
-    const primaryTicket = tickets[0];
-    let qrBase64 = null;
+    let qrCodes = [];
     let pdfBuffer = null;
 
-    if (primaryTicket) {
-        qrBase64 = await generateQRCode(primaryTicket.qrPayload, orderData.id);
-        if (qrBase64) {
-            pdfBuffer = await generateTicketPDF({ title: orderData.eventTitle }, attendeeData, orderData, qrBase64);
+    try {
+        // Generate QR codes for ALL tickets in parallel
+        qrCodes = await Promise.all(
+            tickets.map(t => generateQRCode(t.qrPayload, orderData.id))
+        );
+
+        // Filter out any failed generations (nulls)
+        const validQrs = qrCodes.filter(q => q !== null);
+
+        if (validQrs.length > 0) {
+            // Pass all valid QR codes to generate a consolidated PDF
+            pdfBuffer = await generateTicketPDF({ title: orderData.eventTitle }, attendeeData, orderData, validQrs);
         }
+    } catch (err) {
+        console.error(`[CONFIRMATION_ERROR] orderId=${orderData.id} error=${err.message}`);
     }
 
     const htmlTemplate = getTicketConfirmationTemplate({
         attendeeName: attendeeData.name,
         eventTitle: orderData.eventTitle,
-        eventDate: orderData.eventDate, // Added if available
-        location: orderData.location,   // Added if available
+        eventDate: orderData.eventDate,
+        location: orderData.location,
         orderId: orderData.id,
         amount: orderData.amount,
         ticketsCount: tickets.length,
-        qrBase64
+        qrCodes: qrCodes
     });
 
     let attachments = [];
     
-    // CID Attachment for QR Code (Inline)
-    if (qrBase64) {
-        const base64Data = qrBase64.split(',')[1]; // Extract raw base64
-        attachments.push({
-            content: base64Data,
-            filename: 'qr.png',
-            type: 'image/png',
-            disposition: 'inline',
-            content_id: 'ticket_qr'
-        });
-    }
+    // Add all QR codes as inline attachments
+    qrCodes.forEach((qr, index) => {
+        if (qr) {
+            const base64Data = qr.split(',')[1];
+            attachments.push({
+                content: base64Data,
+                filename: `qr-${index}.png`,
+                type: 'image/png',
+                disposition: 'inline',
+                content_id: `ticket_qr_${index}`
+            });
+        }
+    });
 
     if (pdfBuffer) {
         try {
             const base64Content = Buffer.from(pdfBuffer).toString('base64');
             attachments.push({
                 content: base64Content,
-                filename: `ticket-${orderData.id}.pdf`,
+                filename: `tickets-${orderData.id}.pdf`,
                 type: 'application/pdf',
                 disposition: 'attachment'
             });
-            console.log(`[EMAIL_DEBUG] type=attachment_ready orderId=${orderData.id} size=${base64Content.length} chars`);
+            console.log(`[EMAIL_DEBUG] type=attachment_ready orderId=${orderData.id} tickets=${tickets.length}`);
         } catch (encodingError) {
             console.error(`[EMAIL_ERROR] type=encoding_failed orderId=${orderData.id} error=${encodingError.message}`);
         }
@@ -500,7 +522,7 @@ async function sendTicketConfirmation(attendeeData, orderData, tickets) {
     const msg = {
         to: attendeeData.email,
         subject: `Your Tickets for ${orderData.eventTitle} - ${orderData.id}`,
-        text: `Hi ${attendeeData.name}, your purchase for ${orderData.eventTitle} was successful! Order ID: ${orderData.id}.`,
+        text: `Hi ${attendeeName}, your purchase for ${orderData.eventTitle} was successful! You have ${tickets.length} tickets. Order ID: ${orderData.id}.`,
         html: htmlTemplate,
         attachments: attachments
     };

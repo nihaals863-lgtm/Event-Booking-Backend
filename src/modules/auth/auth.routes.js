@@ -97,10 +97,10 @@ router.post('/login', async (req, res) => {
  * @desc  Register a new organizer
  */
 router.post('/register', async (req, res) => {
-    const { name, email, password } = req.body;
+    const { name, email, password, mobile } = req.body;
 
-    if (!name || !email || !password) {
-        return res.status(400).json({ error: 'All fields are required' });
+    if (!name || !email || !password || !mobile) {
+        return res.status(400).json({ error: 'All fields are required (including phone number)' });
     }
 
     try {
@@ -120,6 +120,7 @@ router.post('/register', async (req, res) => {
                 name,
                 email,
                 password: hashedPassword,
+                mobile,
                 role: 'ORGANIZER',
                 organizerStatus: 'PENDING'
             }
@@ -206,8 +207,8 @@ const authenticate = (req, res, next) => {
  */
 router.put('/profile', authenticate, async (req, res) => {
     const { 
-        name, email, 
-        businessName, abn, 
+        name, email, mobile,
+        businessName, abn, businessAddress,
         bankAccountName, bsb, accountNumber,
         currentPayoutDetailsUpdatedAt // For concurrency check
     } = req.body;
@@ -235,6 +236,7 @@ router.put('/profile', authenticate, async (req, res) => {
             const updates = {};
             if (name !== undefined && name !== "") updates.name = name;
             if (email !== undefined && email !== "") updates.email = email;
+            if (mobile !== undefined && mobile !== "") updates.mobile = mobile;
 
             // 3. Organizer Specific Fields with Soft/Hard Validation
             if (user.role === 'ORGANIZER') {
@@ -274,6 +276,10 @@ router.put('/profile', authenticate, async (req, res) => {
                 if (bankAccountName !== undefined && bankAccountName !== "" && bankAccountName !== user.bankAccountName) {
                     updates.bankAccountName = bankAccountName;
                 }
+
+                if (businessAddress !== undefined && businessAddress !== "" && businessAddress !== user.businessAddress) {
+                    updates.businessAddress = businessAddress;
+                }
             }
 
             // Only update if there are changes (No-Op Guard)
@@ -290,7 +296,8 @@ router.put('/profile', authenticate, async (req, res) => {
             where: { id: userId },
             select: { 
                 id: true, name: true, email: true, role: true, status: true, 
-                businessName: true, abn: true, bankAccountName: true,
+                mobile: true,
+                businessName: true, abn: true, businessAddress: true, bankAccountName: true,
                 bsb: true, accountNumber: true, payoutDetailsUpdatedAt: true,
                 isVerified: true
             }
