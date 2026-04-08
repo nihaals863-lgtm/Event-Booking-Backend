@@ -520,10 +520,9 @@ router.get('/legal/:key', async (req, res) => {
 router.get('/faqs', async (req, res) => {
     try {
         const faqs = await prisma.faq.findMany({
-            orderBy: [
-                { category: 'asc' },
-                { orderIndex: 'asc' }
-            ]
+            orderBy: {
+                id: 'asc'
+            }
         });
         
         // Group by category for easier frontend handling

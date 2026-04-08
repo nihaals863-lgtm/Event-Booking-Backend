@@ -67,7 +67,7 @@ router.get('/events', requireAuth, requireRole(['ADMIN']), async (req, res) => {
         // Map responses for frontend
         const mappedEvents = events.map(e => ({
             ...e,
-            organizer: e.user_event_organizerIdTouser,
+            organiser: e.user_event_organizerIdTouser,
             reviewedBy: e.user_event_reviewedByIdTouser
         }));
 
@@ -110,7 +110,7 @@ router.get('/events/history', requireAuth, requireRole(['ADMIN']), async (req, r
             eventDate: e.eventDate,
             ticketPrice: e.ticketPrice,
             totalTickets: e.totalTickets,
-            organizer: e.user_event_organizerIdTouser?.name || 'Unknown',
+            organiser: e.user_event_organizerIdTouser?.name || 'Unknown',
             decision: e.status === 'APPROVED' ? 'Approved' : 'Rejected',
             reviewedBy: e.user_event_reviewedByIdTouser?.name || 'Platform Admin',
             reason: e.rejectionReason,
