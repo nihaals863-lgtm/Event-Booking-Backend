@@ -2,12 +2,22 @@ const sgMail = require('@sendgrid/mail');
 const qrcode = require('qrcode');
 const puppeteer = require('puppeteer');
 
-// Configure SendGrid
-if (process.env.SENDGRID_API_KEY) {
+// Configure SendGrid — fail explicitly if key is missing
+if (!process.env.SENDGRID_API_KEY) {
+    console.error('[EMAIL_FATAL] SENDGRID_API_KEY is not set. All outgoing emails will be skipped.');
+} else {
     sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+    console.log('[EMAIL_INIT] SendGrid API key configured successfully.');
 }
 
-const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL;
+if (!process.env.SENDGRID_FROM_EMAIL) {
+    console.error('[EMAIL_FATAL] SENDGRID_FROM_EMAIL is not set. Emails cannot be sent without a verified sender.');
+}
+
+// Structured sender with name for proper domain alignment and DMARC compliance
+const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL
+    ? { name: 'EventHubix', email: process.env.SENDGRID_FROM_EMAIL }
+    : null;
 const REPLY_TO_EMAIL = process.env.SENDGRID_REPLY_TO_EMAIL || process.env.ADMIN_EMAIL;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
@@ -70,31 +80,60 @@ async function generateTicketPDF(eventData, attendeeData, orderData, qrCodes) {
         const browser = await getBrowser();
         page = await browser.newPage();
 
+        const safeTitle = eventData.title || 'Event Ticket';
+        const safeDate = eventData.eventDate
+            ? new Date(eventData.eventDate).toLocaleString('en-AU', { dateStyle: 'full', timeStyle: 'short' })
+            : 'Date TBA';
+        const safeLocation = eventData.location || 'Venue TBA';
+        const safeEmail = attendeeData.email || 'N/A';
+        const currency = (orderData.currency || 'AUD').toUpperCase();
+        const orderAmount = typeof orderData.amount === 'number'
+            ? `${currency} ${orderData.amount.toFixed(2)}`
+            : `${currency} ${orderData.amount || '0.00'}`;
+
         const ticketsHtml = qrCodes.map((qr, index) => `
-            <div class="ticket" style="${index < qrCodes.length - 1 ? 'page-break-after: always;' : ''}">
-                <div class="header">
-                    <div class="label">Event Ticket - ${index + 1} of ${qrCodes.length}</div>
-                    <div class="event-name">${eventData.title}</div>
-                </div>
-                <div class="details">
-                    <div style="float: left; width: 50%;">
-                        <p><span class="label">Attendee</span><br><strong>${attendeeData.name}</strong></p>
-                        <p><span class="label">Order ID</span><br>${orderData.id}</p>
+            <section class="sheet" style="${index < qrCodes.length - 1 ? 'page-break-after: always;' : ''}">
+                <div class="ticket-shell">
+                    <header class="hero">
+                        <p class="eyebrow">Invoice Manifest</p>
+                        <h1>${safeTitle}</h1>
+                        <p class="hero-meta">${safeDate}</p>
+                        <p class="hero-meta">${safeLocation}</p>
+                    </header>
+
+                    <div class="row">
+                        <div class="cell">
+                            <span class="label">Order ID</span>
+                            <strong>${orderData.id}</strong>
+                        </div>
+                        <div class="cell">
+                            <span class="label">Pass</span>
+                            <strong>${index + 1} of ${qrCodes.length}</strong>
+                        </div>
                     </div>
-                    <div style="float: left; width: 50%;">
-                        <p><span class="label">Amount Paid</span><br>${orderData.amount}</p>
+
+                    <div class="row">
+                        <div class="cell">
+                            <span class="label">Attendee</span>
+                            <strong>${attendeeData.name}</strong>
+                            <p class="muted">${safeEmail}</p>
+                        </div>
+                        <div class="cell align-right">
+                            <span class="label">Final Total</span>
+                            <strong class="total">${orderAmount}</strong>
+                        </div>
                     </div>
-                    <div style="clear: both;"></div>
+
+                    <div class="qr-wrap">
+                        <img class="qr-image" src="${qr}" alt="Ticket QR ${index + 1}" />
+                        <p class="muted">Scan this QR at event entry gate</p>
+                    </div>
+
+                    <footer class="footer">
+                        Powered by EventHubix • This PDF is system-generated and valid for admission.
+                    </footer>
                 </div>
-                <div class="qr-section">
-                    <img class="qr-image" src="${qr}" />
-                    <div class="label" style="margin-top: 10px;">Scan at Entry</div>
-                </div>
-                <div class="footer">
-                    Powered by EventHubix • This ticket is valid for one entry only.<br>
-                    For refunds, contact us at ${REPLY_TO_EMAIL}
-                </div>
-            </div>
+            </section>
         `).join('');
 
         const htmlContent = `
@@ -102,15 +141,32 @@ async function generateTicketPDF(eventData, attendeeData, orderData, qrCodes) {
             <html>
             <head>
                 <style>
-                    body { font-family: 'Helvetica', sans-serif; margin: 0; color: #333; }
-                    .ticket { border: 2px solid #EEE; padding: 40px; max-width: 600px; margin: 40px auto; border-radius: 8px; }
-                    .header { text-align: center; border-bottom: 2px solid #F5F5F5; padding-bottom: 20px; }
-                    .event-name { font-size: 24px; font-weight: bold; margin: 10px 0; color: #1A1A1A; }
-                    .details { margin: 20px 0; font-size: 14px; line-height: 1.6; }
-                    .label { color: #888; text-transform: uppercase; font-size: 10px; font-weight: bold; letter-spacing: 1px; }
-                    .qr-section { text-align: center; margin-top: 30px; }
-                    .qr-image { width: 180px; height: 180px; border: 1px solid #EEE; padding: 10px; border-radius: 4px; }
-                    .footer { text-align: center; font-size: 10px; color: #AAA; margin-top: 40px; border-top: 1px solid #F5F5F5; padding-top: 15px; }
+                    * { box-sizing: border-box; }
+                    body { font-family: Inter, Arial, sans-serif; margin: 0; color: #0f172a; background: #f3f4f6; }
+                    .sheet { padding: 24px; min-height: 100vh; }
+                    .ticket-shell {
+                        max-width: 700px;
+                        margin: 0 auto;
+                        border-radius: 28px;
+                        background: #0b1438;
+                        color: #fff;
+                        padding: 28px;
+                        border: 1px solid rgba(255,255,255,0.12);
+                    }
+                    .hero { border-bottom: 1px solid rgba(255,255,255,0.15); padding-bottom: 16px; margin-bottom: 16px; }
+                    .eyebrow { margin: 0 0 8px; text-transform: uppercase; letter-spacing: 2px; font-size: 10px; color: #8b96ff; font-weight: 700; }
+                    h1 { margin: 0 0 6px; font-size: 38px; line-height: 1.1; }
+                    .hero-meta { margin: 0; color: rgba(255,255,255,0.75); font-size: 14px; }
+                    .row { display: flex; gap: 14px; margin-top: 12px; }
+                    .cell { flex: 1; background: rgba(255,255,255,0.06); border-radius: 14px; padding: 12px; }
+                    .align-right { text-align: right; }
+                    .label { display: block; text-transform: uppercase; letter-spacing: 1.6px; font-size: 10px; color: rgba(255,255,255,0.7); margin-bottom: 6px; }
+                    strong { font-size: 16px; }
+                    .total { font-size: 28px; color: #8b96ff; }
+                    .muted { margin: 6px 0 0; color: rgba(255,255,255,0.7); font-size: 12px; }
+                    .qr-wrap { margin-top: 18px; text-align: center; background: rgba(255,255,255,0.04); border-radius: 18px; padding: 18px; }
+                    .qr-image { width: 210px; height: 210px; border-radius: 12px; background: #fff; padding: 8px; }
+                    .footer { margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.15); padding-top: 10px; text-align: center; font-size: 11px; color: rgba(255,255,255,0.7); }
                 </style>
             </head>
             <body>
@@ -119,8 +175,8 @@ async function generateTicketPDF(eventData, attendeeData, orderData, qrCodes) {
             </html>
         `;
 
-        await withTimeout(page.setContent(htmlContent), 5000, 'PDF_CONTENT_SET');
-        const pdfBuffer = await withTimeout(page.pdf({ format: 'A4', printBackground: true }), 5000, 'PDF_GENERATION');
+        await withTimeout(page.setContent(htmlContent, { waitUntil: 'load' }), 10000, 'PDF_CONTENT_SET');
+        const pdfBuffer = await withTimeout(page.pdf({ format: 'A4', printBackground: true, margin: { top: '0', right: '0', bottom: '0', left: '0' } }), 12000, 'PDF_GENERATION');
         return pdfBuffer;
     } catch (error) {
         console.error(`[PDF_ERROR] orderId=${orderData.id} error=${error.message}`);
@@ -213,7 +269,7 @@ function getCTAButton(text, url) {
 /**
  * Template: Ticket Confirmation (Buyer)
  */
-function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, location, orderId, amount, ticketsCount, qrCodes }) {
+function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, location, orderId, amount, ticketsCount, qrCodes, hasPdfAttachment = false }) {
     const formattedDate = (eventDate instanceof Date) 
         ? eventDate.toLocaleString('en-AU', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
         : (eventDate || 'Coming Soon');
@@ -275,7 +331,11 @@ function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, lo
         ${qrCodes && qrCodes.length > 0 ? `
         <div style="text-align: center; padding: 20px; background-color: #F8FAFC; border-radius: 28px; margin: 35px 0; border: 2px dashed #E2E8F0;">
             ${qrSections}
-            <p style="margin: 10px 0 0; color: #94A3B8; font-size: 13px; font-weight: 500;">A consolidated PDF with all tickets is attached to this email.</p>
+            <p style="margin: 10px 0 0; color: #94A3B8; font-size: 13px; font-weight: 500;">
+                ${hasPdfAttachment
+                    ? 'A consolidated PDF with all tickets is attached to this email.'
+                    : 'PDF generation is in progress. You can always download all tickets using the button below.'}
+            </p>
         </div>
         ` : ''}
 
@@ -433,23 +493,29 @@ async function sendWithRetry(sendFn, retries = 3, logType = 'unknown') {
  * Generic internal function to send emails safely.
  */
 async function sendEmailRaw(msg, logType = 'unknown', orderId = 'N/A') {
-    if (!process.env.SENDGRID_API_KEY || !FROM_EMAIL) {
-        console.warn(`[EMAIL_SKIPPED] Missing SendGrid configuration. type=${logType} to=${msg.to}`);
+    if (!process.env.SENDGRID_API_KEY) {
+        console.error(`[EMAIL_BLOCKED] SENDGRID_API_KEY missing. type=${logType} to=${msg.to} — email NOT sent.`);
+        return;
+    }
+    if (!FROM_EMAIL) {
+        console.error(`[EMAIL_BLOCKED] SENDGRID_FROM_EMAIL missing. type=${logType} to=${msg.to} — email NOT sent.`);
         return;
     }
 
     try {
+        // Always use structured from object for DMARC/SPF alignment
         msg.from = FROM_EMAIL;
         msg.replyTo = REPLY_TO_EMAIL;
 
-        console.log(`[EMAIL_DEBUG] type=${logType} to=${msg.to} orderId=${orderId}`);
+        console.log(`[EMAIL_SENDING] type=${logType} to=${msg.to} from=${FROM_EMAIL.email} orderId=${orderId}`);
         const response = await sendWithRetry(() => sgMail.send(msg), 3, logType);
-        console.log(`[EMAIL_SUCCESS] status=${response[0].statusCode} to=${msg.to} type=${logType}`);
+        console.log(`[EMAIL_SUCCESS] status=${response[0].statusCode} to=${msg.to} type=${logType} via=sendgrid_api`);
     } catch (error) {
-        console.error(`[EMAIL_ERROR] to=${msg.to} type=${logType} message=${error.message}`);
+        console.error(`[EMAIL_FAILED] to=${msg.to} type=${logType} message=${error.message}`);
         if (error.response) {
-            console.error(JSON.stringify(error.response.body));
+            console.error(`[EMAIL_FAILED_DETAIL] statusCode=${error.code} body=${JSON.stringify(error.response.body)}`);
         }
+        // Do NOT fall back to any other mail transport — fail explicitly
     }
 }
 
@@ -477,6 +543,37 @@ async function sendTicketConfirmation(attendeeData, orderData, tickets) {
         console.error(`[CONFIRMATION_ERROR] orderId=${orderData.id} error=${err.message}`);
     }
 
+    // Fallback PDF if styled renderer fails for any reason.
+    if (!pdfBuffer) {
+        try {
+            const browser = await getBrowser();
+            const page = await browser.newPage();
+            const fallbackHtml = `
+                <html>
+                <body style="font-family: Arial, sans-serif; padding: 24px;">
+                    <h1 style="margin:0 0 8px;">${orderData.eventTitle}</h1>
+                    <p style="margin:0 0 12px;">Order: ${orderData.id}</p>
+                    <p style="margin:0 0 12px;">Attendee: ${attendeeData.name} (${attendeeData.email})</p>
+                    ${(qrCodes || []).map((qr, idx) => `
+                        <div style="margin: 18px 0; page-break-inside: avoid;">
+                            <p style="font-size:12px; color:#666;">Ticket ${idx + 1} of ${(qrCodes || []).length}</p>
+                            <img src="${qr}" style="width:180px;height:180px;border:1px solid #ddd;padding:6px;" />
+                        </div>
+                    `).join('')}
+                </body>
+                </html>
+            `;
+            await withTimeout(page.setContent(fallbackHtml, { waitUntil: 'load' }), 8000, 'PDF_FALLBACK_CONTENT_SET');
+            pdfBuffer = await withTimeout(page.pdf({ format: 'A4', printBackground: true }), 10000, 'PDF_FALLBACK_GENERATION');
+            await page.close().catch(() => {});
+            console.log(`[PDF_FALLBACK_SUCCESS] orderId=${orderData.id}`);
+        } catch (fallbackError) {
+            console.error(`[PDF_FALLBACK_ERROR] orderId=${orderData.id} error=${fallbackError.message}`);
+        }
+    }
+
+    const hasPdfAttachment = !!pdfBuffer;
+
     const htmlTemplate = getTicketConfirmationTemplate({
         attendeeName: attendeeData.name,
         eventTitle: orderData.eventTitle,
@@ -485,7 +582,8 @@ async function sendTicketConfirmation(attendeeData, orderData, tickets) {
         orderId: orderData.id,
         amount: orderData.amount,
         ticketsCount: tickets.length,
-        qrCodes: qrCodes
+        qrCodes: qrCodes,
+        hasPdfAttachment
     });
 
     let attachments = [];
@@ -522,7 +620,7 @@ async function sendTicketConfirmation(attendeeData, orderData, tickets) {
     const msg = {
         to: attendeeData.email,
         subject: `Your Tickets for ${orderData.eventTitle} - ${orderData.id}`,
-        text: `Hi ${attendeeName}, your purchase for ${orderData.eventTitle} was successful! You have ${tickets.length} tickets. Order ID: ${orderData.id}.`,
+        text: `Hi ${attendeeData.name}, your purchase for ${orderData.eventTitle} was successful! You have ${tickets.length} tickets. Order ID: ${orderData.id}.`,
         html: htmlTemplate,
         attachments: attachments
     };
@@ -603,22 +701,32 @@ async function sendNewsletterWelcome(email) {
 /**
  * Orchestrator for purchase-related emails (fire-and-forget).
  */
-function processPurchaseEmails({ attendeeEmail, attendeeName, orderId, totalAmount, eventTitle, eventDate, location, organizerEmail, tickets }) {
-    // FIRE-AND-FORGET to avoid blocking the main thread
-    setImmediate(async () => {
-        try {
-            await Promise.allSettled([
-                sendTicketConfirmation(
-                    { name: attendeeName, email: attendeeEmail }, 
-                    { id: orderId, amount: totalAmount, eventTitle, eventDate, location }, 
-                    tickets
-                ),
-                sendOrganizerSaleNotification(organizerEmail, eventTitle, tickets.length, totalAmount, orderId, attendeeName, attendeeEmail)
-            ]);
-        } catch (err) {
-            console.error('[EMAIL_ORCHESTRATOR_ERROR] Critical failure in email batch:', err.message);
-        }
-    });
+async function processPurchaseEmails({ attendeeEmail, attendeeName, orderId, totalAmount, eventTitle, eventDate, location, organizerEmail, tickets }) {
+    try {
+        const [attendeeResult, organizerResult] = await Promise.allSettled([
+            sendTicketConfirmation(
+                { name: attendeeName, email: attendeeEmail },
+                { id: orderId, amount: totalAmount, eventTitle, eventDate, location },
+                tickets
+            ),
+            sendOrganizerSaleNotification(organizerEmail, eventTitle, tickets.length, totalAmount, orderId, attendeeName, attendeeEmail)
+        ]);
+
+        return {
+            attendeeSent: attendeeResult.status === 'fulfilled',
+            organizerSent: organizerResult.status === 'fulfilled',
+            attendeeError: attendeeResult.status === 'rejected' ? attendeeResult.reason?.message : null,
+            organizerError: organizerResult.status === 'rejected' ? organizerResult.reason?.message : null
+        };
+    } catch (err) {
+        console.error('[EMAIL_ORCHESTRATOR_ERROR] Critical failure in email batch:', err.message);
+        return {
+            attendeeSent: false,
+            organizerSent: false,
+            attendeeError: err.message,
+            organizerError: err.message
+        };
+    }
 }
 
 module.exports = {

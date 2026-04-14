@@ -94,11 +94,15 @@ const createCheckoutSession = async (req, res) => {
                 console.log(`[PROMO_APPLIED] code=${promoCode} discount=${discountValue}`);
             }
 
-            const settings = await tx.platformsettings.findFirst() || { platformFeeRate: 0.015, platformFeeFixed: 0.30, platformFeeFixedCents: 30 };
-            const fee = (unitPrice === 0 || event.serviceFeeType !== 'BUYER') ? 0 : parseFloat(((subtotal * settings.platformFeeRate) + (settings.platformFeeFixed * qtyInt)).toFixed(2));
+            const settings = await tx.platformsettings.findFirst() || await tx.platformsettings.create({ data: {} });
+            const effectiveFeeRate = settings.platformFeeRate;
+            const fee = (unitPrice === 0)
+                ? 0
+                : parseFloat(((subtotal * effectiveFeeRate) + (settings.platformFeeFixed * qtyInt)).toFixed(2));
+            const buyerPaysFee = event.serviceFeeType === 'BUYER';
             
-            // Apply discount to the final total (Ensure it doesn't go below 0)
-            const finalTotal = Math.max(0, (subtotal - discountValue) + fee);
+            // Buyer total should include fee only when fee type is BUYER.
+            const finalTotal = Math.max(0, (subtotal - discountValue) + (buyerPaysFee ? fee : 0));
             
             // DUAL-WRITE: Calculate cents for future migration
             const finalTotalCents = Math.round(finalTotal * 100);
@@ -114,7 +118,9 @@ const createCheckoutSession = async (req, res) => {
                     ticketReleaseId: ticketReleaseIdInt,
                     quantity: qtyInt,
                     amount: finalTotal,
-                    amountCents: finalTotalCents, // New field
+                    amountCents: finalTotalCents,
+                    platformFee: fee,
+                    platformFeeCents: Math.round(fee * 100),
                     customerEmail: attendeeEmail,
                     customerName: attendeeName,
                     userId: userId,

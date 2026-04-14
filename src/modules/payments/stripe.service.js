@@ -28,7 +28,7 @@ const stripeService = {
             line_items: [
                 {
                     price_data: {
-                        currency: process.env.STRIPE_CURRENCY || 'aud',
+                        currency: (process.env.STRIPE_CURRENCY || 'aud').trim(),
                         product_data: {
                             name: `${eventTitle} - ${ticketName}`,
                             description: `Order ID: ${orderId}`,

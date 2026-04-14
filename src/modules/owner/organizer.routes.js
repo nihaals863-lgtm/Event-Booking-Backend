@@ -44,7 +44,7 @@ router.post('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
             isPublic: isPublic !== undefined ? isPublic : true,
             sellingFastThreshold: sellingFastThreshold ? parseInt(sellingFastThreshold) : 20,
             serviceFeeType: serviceFeeType || 'BUYER',
-            serviceFeeRate: serviceFeeRate ? parseFloat(serviceFeeRate) : 0.03,
+            serviceFeeRate: serviceFeeRate !== undefined ? (serviceFeeRate === null ? null : parseFloat(serviceFeeRate)) : null,
             tags: tags ? JSON.stringify(tags) : null,
             highlights: highlights ? JSON.stringify(highlights) : null,
             promocode: (promoCodes && promoCodes.length > 0) ? {
@@ -129,7 +129,13 @@ router.get('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), asyn
                 eventimage: true,
                 promocode: true,
                 eventschedule: true,
-                ticketrelease: true
+                ticketrelease: true,
+                purchaseorder: {
+                    select: {
+                        platformFee: true,
+                        quantity: true
+                    }
+                }
             }
         });
 
@@ -137,6 +143,10 @@ router.get('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), asyn
         if (event.organizerId !== req.user.id && req.user.role !== 'ADMIN') {
             return res.status(403).json({ error: 'Not authorized' });
         }
+
+        const totalFees = event.purchaseorder.reduce((sum, order) => sum + (order.platformFee || 0), 0);
+        const buyerFees = event.serviceFeeType === 'BUYER' ? totalFees : 0;
+        const organiserFees = event.serviceFeeType === 'ORGANIZER' ? totalFees : 0;
 
         // Map response for frontend
         const mappedEvent = {
@@ -146,7 +156,13 @@ router.get('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), asyn
             galleryImages: event.eventimage,
             promoCodes: event.promocode,
             schedule: event.eventschedule,
-            ticketReleases: event.ticketrelease
+            ticketReleases: event.ticketrelease,
+            feeSummary: {
+                totalFees,
+                buyerFees,
+                organiserFees,
+                feeType: event.serviceFeeType
+            }
         };
 
         res.json(mappedEvent);
@@ -489,6 +505,18 @@ router.delete('/releases/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']),
  */
 router.get('/reports', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
     try {
+        const toNumber = (val) => {
+            const n = Number(val);
+            return Number.isFinite(n) ? n : 0;
+        };
+        const resolveOrderAmount = (order) => toNumber(order.amount);
+        const resolveOrderFee = (order) => {
+            if (order.platformFee !== null && order.platformFee !== undefined) return toNumber(order.platformFee);
+            if (order.platformFeeCents !== null && order.platformFeeCents !== undefined) return toNumber(order.platformFeeCents) / 100;
+            return 0;
+        };
+        const resolveOrderQuantity = (order) => toNumber(order.quantity);
+
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -496,36 +524,62 @@ router.get('/reports', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
         const events = await prisma.event.findMany({
             where: {
                 organizerId: req.user.id
+            },
+            include: {
+                purchaseorder: {
+                    where: {
+                        paymentStatus: 'SUCCESS',
+                        status: 'COMPLETED'
+                    },
+                    select: {
+                        platformFee: true,
+                        platformFeeCents: true,
+                        amount: true,
+                        quantity: true
+                    }
+                }
             }
         });
 
         const stats = events.reduce((acc, event) => {
-            const gross = (event.ticketsSold || 0) * event.ticketPrice;
-            const feeRate = event.serviceFeeRate || 0.03;
-            const platformFee = gross * feeRate;
+            const eventTotalGross = event.purchaseorder.reduce((sum, order) => sum + resolveOrderAmount(order), 0);
+            const eventTotalFees = event.purchaseorder.reduce((sum, order) => {
+                return sum + resolveOrderFee(order);
+            }, 0);
+            const successfulOrderTickets = event.purchaseorder.reduce((sum, order) => sum + resolveOrderQuantity(order), 0);
+            const gross = eventTotalGross;
+            const fee = eventTotalFees;
+            const net = Math.max(0, gross - fee);
 
             acc.totalGross += gross;
-            acc.totalFees += platformFee;
-
-            // If organiser covers fee, net is gross - fee. If buyer covers, net is full ticket price.
-            const net = event.serviceFeeType === 'ORGANIZER' ? (gross - platformFee) : gross;
+            acc.totalFees += fee;
             acc.totalNet += net;
 
-            acc.totalTicketsSold += (event.ticketsSold || 0);
+            acc.totalTicketsSold += successfulOrderTickets;
             acc.totalCapacity += event.totalTickets;
             return acc;
         }, { totalGross: 0, totalNet: 0, totalFees: 0, totalTicketsSold: 0, totalCapacity: 0 });
 
-        // Calculate Revenue this month
-        const recentTickets = await prisma.ticket.findMany({
+        // Calculate revenue this month from final settled orders only.
+        const ordersThisMonth = await prisma.purchaseorder.findMany({
             where: {
                 event: { organizerId: req.user.id },
-                purchasedAt: { gte: startOfMonth }
+                paymentStatus: 'SUCCESS',
+                status: 'COMPLETED',
+                processedAt: { gte: startOfMonth }
             },
-            include: { event: { select: { ticketPrice: true } } }
+            select: {
+                amount: true,
+                platformFee: true,
+                platformFeeCents: true
+            }
         });
 
-        const revenueThisMonth = recentTickets.reduce((sum, t) => sum + t.event.ticketPrice, 0);
+        const revenueThisMonth = ordersThisMonth.reduce((sum, order) => {
+            const gross = resolveOrderAmount(order);
+            const fee = resolveOrderFee(order);
+            return sum + Math.max(0, gross - fee);
+        }, 0);
 
         const report = {
             totalGross: stats.totalGross,
@@ -537,13 +591,23 @@ router.get('/reports', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
             totalCheckedIn: await prisma.ticket.count({
                 where: {
                     event: { organizerId: req.user.id },
+                    purchaseorder: {
+                        paymentStatus: 'SUCCESS',
+                        status: 'COMPLETED'
+                    },
                     status: 'USED'
                 }
             }),
             events: events.map(e => {
-                const gross = (e.ticketsSold || 0) * e.ticketPrice;
-                const fee = gross * (e.serviceFeeRate || 0.03);
-                const net = e.serviceFeeType === 'ORGANIZER' ? (gross - fee) : gross;
+                const eventTotalGross = e.purchaseorder.reduce((sum, order) => sum + resolveOrderAmount(order), 0);
+                const eventTotalFees = e.purchaseorder.reduce((sum, order) => {
+                    return sum + resolveOrderFee(order);
+                }, 0);
+                const successfulOrderTickets = e.purchaseorder.reduce((sum, order) => sum + resolveOrderQuantity(order), 0);
+                const gross = eventTotalGross;
+                const fee = eventTotalFees;
+                const net = Math.max(0, gross - fee);
+                
                 return {
                     id: e.id,
                     title: e.title,
@@ -551,14 +615,18 @@ router.get('/reports', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
                     netPayout: net,
                     platformFee: fee,
                     feeType: e.serviceFeeType,
-                    ticketsSold: (e.ticketsSold || 0),
+                    ticketsSold: successfulOrderTickets,
                     totalTickets: e.totalTickets,
                     status: e.status
                 };
             }),
             recentSales: await prisma.ticket.findMany({
                 where: {
-                    event: { organizerId: req.user.id }
+                    event: { organizerId: req.user.id },
+                    purchaseorder: {
+                        paymentStatus: 'SUCCESS',
+                        status: 'COMPLETED'
+                    }
                 },
                 take: 5,
                 orderBy: { purchasedAt: 'desc' },

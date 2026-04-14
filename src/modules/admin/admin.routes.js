@@ -104,6 +104,7 @@ router.get('/events/history', requireAuth, requireRole(['ADMIN']), async (req, r
         const mappedHistory = history.map(e => ({
             id: e.id,
             eventId: e.id, // for details lookup
+            organizerId: e.organizerId,
             eventName: e.title,
             category: e.category,
             location: e.location,
@@ -529,7 +530,8 @@ router.patch('/settings', requireAuth, requireRole(['ADMIN']), async (req, res) 
 
     const updateData = {};
     if (currency) {
-        const SUPPORTED = ['AUD', 'USD', 'INR', 'EUR', 'GBP', 'SGD', 'NZD', 'CAD'];
+        // NOTE: Only AUD is active. Uncomment others when client wants multi-currency support.
+        const SUPPORTED = ['AUD' /*, 'USD', 'INR', 'EUR', 'GBP', 'SGD', 'NZD', 'CAD' */];
         if (!SUPPORTED.includes(currency)) {
             return res.status(400).json({ error: `Unsupported currency. Allowed: ${SUPPORTED.join(', ')}` });
         }
@@ -546,6 +548,7 @@ router.patch('/settings', requireAuth, requireRole(['ADMIN']), async (req, res) 
         const fixed = parseFloat(platformFeeFixed);
         if (isNaN(fixed) || fixed < 0) return res.status(400).json({ error: 'Invalid fixed fee' });
         updateData.platformFeeFixed = fixed;
+        updateData.platformFeeFixedCents = Math.round(fixed * 100);
     }
 
     try {

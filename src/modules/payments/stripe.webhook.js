@@ -166,7 +166,7 @@ async function confirmOrderPayment(sessionOrIntent) {
                     include: { user_event_organizerIdTouser: true }
                 });
 
-                emailService.processPurchaseEmails({
+                const emailResult = await emailService.processPurchaseEmails({
                     attendeeEmail: order.customerEmail,
                     attendeeName: order.customerName,
                     orderId: orderId,
@@ -178,11 +178,15 @@ async function confirmOrderPayment(sessionOrIntent) {
                     tickets: generatedTickets
                 });
 
-                // Mark as sent
-                await prisma.purchaseorder.update({
-                    where: { id: orderId },
-                    data: { emailSent: true }
-                });
+                if (emailResult?.attendeeSent) {
+                    await prisma.purchaseorder.update({
+                        where: { id: orderId },
+                        data: { emailSent: true }
+                    });
+                    console.log(`[EMAIL_CONFIRMED] attendee email sent for ${orderId}`);
+                } else {
+                    console.error(`[EMAIL_PENDING] attendee email failed for ${orderId}. Will retry on fallback paths. reason=${emailResult?.attendeeError || 'unknown'}`);
+                }
             } else {
                 console.log(`[EMAIL_SKIPPED] Idempotency: Emails already sent for ${orderId}`);
             }

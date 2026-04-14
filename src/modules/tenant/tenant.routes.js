@@ -139,15 +139,16 @@ router.post('/purchase', async (req, res) => {
                 }
             }
 
-            const settings = await tx.platformsettings.findFirst() || { platformFeeRate: 0.015, platformFeeFixed: 0.30 };
-            const globalFeeRate = settings.platformFeeRate || 0.015;
-            const globalFeeFixed = settings.platformFeeFixed || 0.30;
+            const settings = await tx.platformsettings.findFirst() || await tx.platformsettings.create({ data: {} });
+            const effectiveFeeRate = settings.platformFeeRate;
+            const globalFeeFixed = settings.platformFeeFixed;
 
-            const fee = (ticketPrice === 0 || event.serviceFeeType !== 'BUYER') 
+            const fee = (ticketPrice === 0)
                 ? 0 
-                : parseFloat(((subtotal * globalFeeRate) + (globalFeeFixed * quantity)).toFixed(2));
+                : parseFloat(((subtotal * effectiveFeeRate) + (globalFeeFixed * quantity)).toFixed(2));
+            const buyerPaysFee = event.serviceFeeType === 'BUYER';
             
-            const finalTotal = subtotal + fee - discountAmount;
+            const finalTotal = subtotal + (buyerPaysFee ? fee : 0) - discountAmount;
             const finalTotalCents = Math.round(finalTotal * 100);
 
             // 3. Create Purchase Order Tracking
@@ -159,8 +160,15 @@ router.post('/purchase', async (req, res) => {
                     eventId: eventIdInt,
                     amount: finalTotal,
                     amountCents: finalTotalCents,
+                    platformFee: fee,
+                    platformFeeCents: Math.round(fee * 100),
                     currency: 'AUD',
-                    status: 'COMPLETED'
+                    status: 'COMPLETED',
+                    paymentStatus: 'SUCCESS',
+                    processedAt: new Date(),
+                    customerName: attendeeName,
+                    customerEmail: attendeeEmail,
+                    quantity: quantity
                 }
             });
 
@@ -241,7 +249,7 @@ router.post('/purchase', async (req, res) => {
         });
 
         if (latestOrder && !latestOrder.emailSent) {
-            emailService.processPurchaseEmails({
+            const emailResult = await emailService.processPurchaseEmails({
                 attendeeEmail,
                 attendeeName,
                 orderId: result.orderId,
@@ -253,11 +261,14 @@ router.post('/purchase', async (req, res) => {
                 tickets: result.tickets
             });
 
-            // Mark as sent
-            await prisma.purchaseorder.update({
-                where: { id: result.orderId },
-                data: { emailSent: true }
-            });
+            if (emailResult?.attendeeSent) {
+                await prisma.purchaseorder.update({
+                    where: { id: result.orderId },
+                    data: { emailSent: true }
+                });
+            } else {
+                console.error(`[EMAIL_PENDING] attendee email failed for ${result.orderId}. reason=${emailResult?.attendeeError || 'unknown'}`);
+            }
         }
 
         res.status(201).json({

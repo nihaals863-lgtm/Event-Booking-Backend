@@ -29,7 +29,7 @@ model event {
   highlights                    String?              @db.LongText
   createdAt                     DateTime             @default(now())
   updatedAt                     DateTime             @updatedAt
-  serviceFeeRate                Float                @default(0.03)
+  serviceFeeRate                Float?
   serviceFeeType                event_serviceFeeType @default(BUYER)
   pricingType                   event_pricingType    @default(SINGLE)
   user_event_organizerIdTouser  user                 @relation("event_organizerIdTouser", fields: [organizerId], references: [id], map: "Event_organizerId_fkey")
@@ -159,6 +159,10 @@ model purchaseorder {
   refundedAt     DateTime?
   statusDetail   String? // e.g., "TICKET_PENDING", "PARTIAL_SUCCESS"
   emailSent      Boolean   @default(false)
+  
+  // Fee Tracking
+  platformFee      Float     @default(0)
+  platformFeeCents Int       @default(0)
 
   event   event    @relation(fields: [eventId], references: [id], map: "PurchaseOrder_eventId_fkey")
   tickets ticket[]
