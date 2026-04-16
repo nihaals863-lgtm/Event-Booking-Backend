@@ -1,5 +1,6 @@
 const express = require('express');
 const prisma = require('../../config/db');
+const { verifyTicketDownloadToken } = require('../../services/emailService');
 
 const router = express.Router();
 
@@ -330,6 +331,110 @@ router.get('/orders/:orderId/tickets', async (req, res) => {
     } catch (error) {
         console.error('Error fetching order tickets:', error);
         res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * @route GET /api/public/orders/:orderId/tickets/download
+ * @desc  Download consolidated ticket PDF using secure token
+ */
+router.get('/orders/:orderId/tickets/download', async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const token = req.query.token;
+
+        const order = await prisma.purchaseorder.findUnique({
+            where: { id: orderId },
+            select: {
+                id: true,
+                customerEmail: true,
+                customerName: true,
+                amount: true,
+                currency: true,
+                event: {
+                    select: {
+                        title: true,
+                        eventDate: true,
+                        location: true
+                    }
+                }
+            }
+        });
+
+        if (!order) return res.status(404).json({ error: 'Order not found' });
+
+        const tokenValid = verifyTicketDownloadToken(token, order.id, order.customerEmail);
+        if (!tokenValid) return res.status(403).json({ error: 'Invalid or expired download link' });
+
+        const tickets = await prisma.ticket.findMany({
+            where: { purchaseOrderId: order.id },
+            select: {
+                qrPayload: true
+            },
+            orderBy: { id: 'asc' }
+        });
+
+        if (!tickets.length) return res.status(404).json({ error: 'No tickets found for this order' });
+
+        // Build a PDF for direct download.
+        const qrcode = require('qrcode');
+        const PDFDocument = require('pdfkit');
+        const qrCodes = await Promise.all(tickets.map(t => qrcode.toDataURL(t.qrPayload)));
+
+        const pdfBuffer = await new Promise((resolve, reject) => {
+            const doc = new PDFDocument({ size: 'A4', margin: 42 });
+            const chunks = [];
+            doc.on('data', chunk => chunks.push(chunk));
+            doc.on('end', () => resolve(Buffer.concat(chunks)));
+            doc.on('error', reject);
+
+            const safeTitle = order.event?.title || 'Event Ticket';
+            const safeDate = order.event?.eventDate
+                ? new Date(order.event.eventDate).toLocaleString('en-AU', { dateStyle: 'full', timeStyle: 'short' })
+                : 'Date TBA';
+            const safeLocation = order.event?.location || 'Venue TBA';
+            const safeEmail = order.customerEmail || 'N/A';
+            const currency = (order.currency || 'AUD').toUpperCase();
+            const orderAmount = `${currency} ${(Number(order.amount) || 0).toFixed(2)}`;
+
+            qrCodes.forEach((qr, index) => {
+                if (index > 0) doc.addPage();
+                doc.rect(30, 30, doc.page.width - 60, doc.page.height - 60).lineWidth(1).strokeColor('#E2E8F0').stroke();
+                doc.fontSize(10).fillColor('#6366F1').text('Invoice Manifest', 50, 55, { uppercase: true });
+                doc.fontSize(24).fillColor('#0F172A').text(safeTitle, 50, 72, { width: 500 });
+                doc.fontSize(11).fillColor('#64748B').text(safeDate, 50, 108);
+                doc.fontSize(11).fillColor('#64748B').text(safeLocation, 50, 124);
+                doc.fontSize(10).fillColor('#94A3B8').text('Order ID', 50, 170);
+                doc.fontSize(12).fillColor('#0F172A').text(order.id, 50, 184);
+                doc.fontSize(10).fillColor('#94A3B8').text('Pass', 370, 170);
+                doc.fontSize(12).fillColor('#0F172A').text(`${index + 1} of ${qrCodes.length}`, 370, 184);
+                doc.fontSize(10).fillColor('#94A3B8').text('Attendee', 50, 220);
+                doc.fontSize(12).fillColor('#0F172A').text(order.customerName || 'Guest', 50, 234);
+                doc.fontSize(11).fillColor('#64748B').text(safeEmail, 50, 250);
+                doc.fontSize(10).fillColor('#94A3B8').text('Final Total', 370, 220);
+                doc.fontSize(18).fillColor('#4F46E5').text(orderAmount, 370, 236);
+
+                const qrBuffer = Buffer.from(String(qr).split(',')[1] || '', 'base64');
+                if (qrBuffer.length > 0) {
+                    doc.image(qrBuffer, 210, 320, { fit: [180, 180], align: 'center', valign: 'center' });
+                    doc.fontSize(10).fillColor('#64748B').text('Scan this QR at event entry gate', 185, 512);
+                }
+                doc.fontSize(9).fillColor('#94A3B8').text(
+                    'Powered by EventHubix • This PDF is system-generated and valid for admission.',
+                    50,
+                    760,
+                    { width: 500, align: 'center' }
+                );
+            });
+            doc.end();
+        });
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=\"tickets-${order.id}.pdf\"`);
+        return res.send(pdfBuffer);
+    } catch (error) {
+        console.error('Ticket download error:', error);
+        return res.status(500).json({ error: 'Failed to generate ticket PDF' });
     }
 });
 

@@ -201,24 +201,23 @@ router.get('/dashboard', requireAuth, requireRole(['ADMIN']), async (req, res) =
             prisma.user.count({ where: { role: 'ORGANIZER' } })
         ]);
 
-        const revStats = await prisma.event.findMany({
+        const settledOrders = await prisma.purchaseorder.findMany({
+            where: { paymentStatus: 'SUCCESS', status: 'COMPLETED' },
             select: {
-                ticketsSold: true,
-                ticketPrice: true,
-                serviceFeeType: true,
-                serviceFeeRate: true
+                amount: true,
+                platformFee: true,
+                platformFeeCents: true
             }
         });
 
-        const settings = await prisma.platformsettings.findFirst() || { platformFeeRate: 0.015 };
-        const feeRate = settings.platformFeeRate || 0.015;
+        const resolveOrderFee = (order) => {
+            if (order.platformFee !== null && order.platformFee !== undefined) return Number(order.platformFee) || 0;
+            if (order.platformFeeCents !== null && order.platformFeeCents !== undefined) return (Number(order.platformFeeCents) || 0) / 100;
+            return 0;
+        };
 
-        const totalRevenue = revStats.reduce((sum, ev) => sum + ((ev.ticketsSold || 0) * ev.ticketPrice), 0);
-        const platformRevenue = revStats.reduce((sum, ev) => {
-            const gross = (ev.ticketsSold || 0) * ev.ticketPrice;
-            const fee = gross * feeRate;
-            return sum + fee;
-        }, 0);
+        const totalRevenue = settledOrders.reduce((sum, order) => sum + (Number(order.amount) || 0), 0);
+        const platformRevenue = settledOrders.reduce((sum, order) => sum + resolveOrderFee(order), 0);
         const netRevenue = totalRevenue - platformRevenue;
 
         // Calculate Growth Percentages
@@ -265,24 +264,23 @@ router.get('/stats', requireAuth, requireRole(['ADMIN']), async (req, res) => {
             prisma.ticket.count()
         ]);
 
-        const revStats = await prisma.event.findMany({
+        const settledOrders = await prisma.purchaseorder.findMany({
+            where: { paymentStatus: 'SUCCESS', status: 'COMPLETED' },
             select: {
-                ticketsSold: true,
-                ticketPrice: true,
-                serviceFeeType: true,
-                serviceFeeRate: true
+                amount: true,
+                platformFee: true,
+                platformFeeCents: true
             }
         });
 
-        const settings = await prisma.platformsettings.findFirst() || { platformFeeRate: 0.015 };
-        const feeRate = settings.platformFeeRate || 0.015;
+        const resolveOrderFee = (order) => {
+            if (order.platformFee !== null && order.platformFee !== undefined) return Number(order.platformFee) || 0;
+            if (order.platformFeeCents !== null && order.platformFeeCents !== undefined) return (Number(order.platformFeeCents) || 0) / 100;
+            return 0;
+        };
 
-        const totalRevenue = revStats.reduce((sum, ev) => sum + ((ev.ticketsSold || 0) * ev.ticketPrice), 0);
-        const platformRevenue = revStats.reduce((sum, ev) => {
-            const gross = (ev.ticketsSold || 0) * ev.ticketPrice;
-            const fee = gross * feeRate;
-            return sum + fee;
-        }, 0);
+        const totalRevenue = settledOrders.reduce((sum, order) => sum + (Number(order.amount) || 0), 0);
+        const platformRevenue = settledOrders.reduce((sum, order) => sum + resolveOrderFee(order), 0);
 
         res.json({
             totalEvents,
@@ -573,6 +571,31 @@ router.patch('/settings', requireAuth, requireRole(['ADMIN']), async (req, res) 
  */
 router.get('/organizers', requireAuth, requireRole(['ADMIN']), async (req, res) => {
     try {
+        const settings = await prisma.platformsettings.findFirst() || await prisma.platformsettings.create({ data: {} });
+        const feeRate = Number(settings.platformFeeRate) || 0;
+        const fixedFee = Number(settings.platformFeeFixed) || 0;
+
+        const toCents = (order) => {
+            if (order.amountCents !== null && order.amountCents !== undefined) return Number(order.amountCents) || 0;
+            if (order.amount !== null && order.amount !== undefined) return Math.round((Number(order.amount) || 0) * 100);
+            if (order.amountPaidCents !== null && order.amountPaidCents !== undefined) return Number(order.amountPaidCents) || 0;
+            return 0;
+        };
+        const resolveStoredFeeCents = (order) => {
+            if (order.platformFeeCents !== null && order.platformFeeCents !== undefined) return Number(order.platformFeeCents) || 0;
+            if (order.platformFee !== null && order.platformFee !== undefined) return Math.round((Number(order.platformFee) || 0) * 100);
+            return 0;
+        };
+        const resolveEffectiveFeeCents = (order, feeType) => {
+            if (feeType === 'ORGANIZER') {
+                const amount = toCents(order) / 100;
+                const qty = Number(order.quantity) || 0;
+                if (amount <= 0 || qty <= 0) return 0;
+                return Math.round((((amount * feeRate) + (fixedFee * qty)) * 100));
+            }
+            return resolveStoredFeeCents(order);
+        };
+
         const organizers = await prisma.user.findMany({
             where: { role: 'ORGANIZER' },
             select: {
@@ -596,8 +619,13 @@ router.get('/organizers', requireAuth, requireRole(['ADMIN']), async (req, res) 
                         purchaseorder: {
                             where: { paymentStatus: 'SUCCESS' },
                             select: {
+                                amount: true,
+                                amountCents: true,
                                 amountPaidCents: true,
-                                refundedAmount: true
+                                platformFee: true,
+                                platformFeeCents: true,
+                                refundedAmount: true,
+                                quantity: true
                             }
                         }
                     }
@@ -606,12 +634,27 @@ router.get('/organizers', requireAuth, requireRole(['ADMIN']), async (req, res) 
         });
 
         const mappedOrganizers = organizers.map(org => {
-            // Aggregate Earnings
+            // Aggregate Earnings and fee split by fee payer type.
             let totalEarnedCents = 0;
+            let buyerPaidPlatformFeeCents = 0;
+            let organizerPaidPlatformFeeCents = 0;
             org.event_event_organizerIdTouser.forEach(ev => {
                 ev.purchaseorder.forEach(po => {
-                    const netAmount = (po.amountPaidCents || 0) - Math.round((po.refundedAmount || 0) * 100);
-                    totalEarnedCents += netAmount;
+                    const settledAmountCents = toCents(po);
+                    const feeCents = resolveEffectiveFeeCents(po, ev.serviceFeeType);
+                    const refundCents = Math.round((po.refundedAmount || 0) * 100);
+                    const netAfterRefundCents = Math.max(0, settledAmountCents - refundCents);
+
+                    const organizerReceivableCents = ev.serviceFeeType === 'BUYER'
+                        ? Math.max(0, netAfterRefundCents - feeCents)
+                        : netAfterRefundCents;
+
+                    totalEarnedCents += organizerReceivableCents;
+                    if (ev.serviceFeeType === 'BUYER') {
+                        buyerPaidPlatformFeeCents += feeCents;
+                    } else if (ev.serviceFeeType === 'ORGANIZER') {
+                        organizerPaidPlatformFeeCents += feeCents;
+                    }
                 });
             });
 
@@ -637,11 +680,17 @@ router.get('/organizers', requireAuth, requireRole(['ADMIN']), async (req, res) 
                 },
                 stats: {
                     totalEarned: totalEarnedCents / 100,
+                    totalPayoutGenerated: totalEarnedCents / 100,
                     totalPaid: totalPaidCents / 100,
                     availableBalance: availableBalanceCents / 100,
+                    buyerPaidPlatformFees: buyerPaidPlatformFeeCents / 100,
+                    organizerPaidPlatformFees: organizerPaidPlatformFeeCents / 100,
                     totalEarnedCents,
+                    totalPayoutGeneratedCents: totalEarnedCents,
                     totalPaidCents,
-                    availableBalanceCents
+                    availableBalanceCents,
+                    buyerPaidPlatformFeeCents,
+                    organizerPaidPlatformFeeCents
                 },
                 hasPendingPayout: pendingPayoutCount > 0,
                 payoutHistory: org.payout,
@@ -667,6 +716,18 @@ router.post('/organizers/:id/payouts', requireAuth, requireRole(['ADMIN']), asyn
     const { amount, notes } = req.body; // Amount in Dollars (float), optional notes
 
     try {
+        const toCents = (order) => {
+            if (order.amountCents !== null && order.amountCents !== undefined) return Number(order.amountCents) || 0;
+            if (order.amount !== null && order.amount !== undefined) return Math.round((Number(order.amount) || 0) * 100);
+            if (order.amountPaidCents !== null && order.amountPaidCents !== undefined) return Number(order.amountPaidCents) || 0;
+            return 0;
+        };
+        const resolveFeeCents = (order) => {
+            if (order.platformFeeCents !== null && order.platformFeeCents !== undefined) return Number(order.platformFeeCents) || 0;
+            if (order.platformFee !== null && order.platformFee !== undefined) return Math.round((Number(order.platformFee) || 0) * 100);
+            return 0;
+        };
+
         const organizerId = parseInt(id);
         const amountCents = Math.round(parseFloat(amount) * 100);
 
@@ -683,7 +744,14 @@ router.post('/organizers/:id/payouts', requireAuth, requireRole(['ADMIN']), asyn
                     include: {
                         purchaseorder: {
                             where: { paymentStatus: 'SUCCESS' },
-                            select: { amountPaidCents: true, refundedAmount: true }
+                            select: {
+                                amount: true,
+                                amountCents: true,
+                                amountPaidCents: true,
+                                platformFee: true,
+                                platformFeeCents: true,
+                                refundedAmount: true
+                            }
                         }
                     }
                 }
@@ -704,7 +772,14 @@ router.post('/organizers/:id/payouts', requireAuth, requireRole(['ADMIN']), asyn
         let totalEarnedCents = 0;
         org.event_event_organizerIdTouser.forEach(ev => {
             ev.purchaseorder.forEach(po => {
-                totalEarnedCents += (po.amountPaidCents || 0) - Math.round((po.refundedAmount || 0) * 100);
+                const settledAmountCents = toCents(po);
+                const feeCents = resolveFeeCents(po);
+                const refundCents = Math.round((po.refundedAmount || 0) * 100);
+                const netAfterRefundCents = Math.max(0, settledAmountCents - refundCents);
+                const organizerReceivableCents = ev.serviceFeeType === 'BUYER'
+                    ? Math.max(0, netAfterRefundCents - feeCents)
+                    : netAfterRefundCents;
+                totalEarnedCents += organizerReceivableCents;
             });
         });
         const totalPaidCents = org.payout.filter(p => p.status === 'PAID').reduce((sum, p) => sum + p.amountCents, 0);

@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const prisma = require('../../config/db');
 const emailService = require('../../services/emailService');
+const { requireAuth, requireApprovedOrganizer } = require('../../middlewares/authMiddleware');
 
 const router = express.Router();
 
@@ -84,8 +85,6 @@ router.post('/login', async (req, res) => {
             return res.status(403).json({ error: 'Your account has been suspended. Please contact support.' });
         }
 
-        /* 
-        // Organizer Approval Gate: Block pending/rejected organizers from logging in
         if (user.role === 'ORGANIZER' && user.organizerStatus !== 'APPROVED') {
             if (user.organizerStatus === 'REJECTED') {
                 return res.status(403).json({
@@ -96,7 +95,6 @@ router.post('/login', async (req, res) => {
                 error: 'Your organizer account is awaiting admin approval. Please wait until admin approves your request.'
             });
         }
-        */
 
         const token = jwt.sign(
             { id: user.id, role: user.role, email: user.email, status: user.status, organizerStatus: user.organizerStatus },
@@ -164,36 +162,9 @@ router.post('/register', async (req, res) => {
             email: user.email 
         });
 
-        /* 
         res.status(202).json({
             pending: true,
-            message: 'Your organizer account is pending admin approval. You will be able to login after approval.'
-        });
-        */
-
-        /* 
-        // Immediate login after registration (Approval flow disabled)
-        const token = jwt.sign(
-            { id: user.id, role: user.role, email: user.email, status: user.status, organizerStatus: user.organizerStatus },
-            process.env.JWT_SECRET || 'supersafe_jwt_secret_for_local_development',
-            { expiresIn: '1d' }
-        );
-
-        res.status(201).json({
-            user: {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                role: user.role,
-                status: user.status,
-                organizerStatus: user.organizerStatus
-            },
-            token
-        });
-        */
-
-        res.status(201).json({
-            message: 'Registration successful! Please log in to your account.'
+            message: 'Your organizer account is pending admin approval. You will be able to log in after an administrator approves your request.'
         });
     } catch (error) {
         console.error('Registration error details:', {
@@ -216,26 +187,10 @@ const maskValue = (val) => {
 };
 
 /**
- * Middleware to verify JWT
- */
-const authenticate = (req, res, next) => {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
-
-    try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersafe_jwt_secret_for_local_development');
-        req.user = decoded;
-        next();
-    } catch (err) {
-        res.status(401).json({ error: 'Invalid token' });
-    }
-};
-
-/**
  * @route PUT /api/auth/profile
  * @desc  Update user profile (name, email, business/bank details)
  */
-router.put('/profile', authenticate, async (req, res) => {
+router.put('/profile', requireAuth, requireApprovedOrganizer, async (req, res) => {
     const { 
         name, email, mobile,
         businessName, abn, businessAddress,
@@ -367,7 +322,7 @@ router.put('/profile', authenticate, async (req, res) => {
  * @route GET /api/auth/profile
  * @desc  Get authenticated user profile
  */
-router.get('/profile', authenticate, async (req, res) => {
+router.get('/profile', requireAuth, requireApprovedOrganizer, async (req, res) => {
     try {
         const user = await prisma.user.findUnique({
             where: { id: req.user.id },
@@ -411,7 +366,7 @@ router.get('/profile', authenticate, async (req, res) => {
  * @route PUT /api/auth/update-password
  * @desc  Update user password
  */
-router.put('/update-password', authenticate, async (req, res) => {
+router.put('/update-password', requireAuth, requireApprovedOrganizer, async (req, res) => {
     const { currentPassword, newPassword } = req.body;
     const userId = req.user.id;
 

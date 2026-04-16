@@ -1,14 +1,16 @@
 const express = require('express');
 const prisma = require('../../config/db');
-const { requireAuth, requireRole } = require('../../middlewares/authMiddleware');
+const { requireAuth, requireRole, requireApprovedOrganizer } = require('../../middlewares/authMiddleware');
 
 const router = express.Router();
+
+const organizerAuthStack = [requireAuth, requireRole(['ORGANIZER', 'ADMIN']), requireApprovedOrganizer];
 
 /**
  * @route POST /api/organiser/events
  * @desc  Create a new event
  */
-router.post('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.post('/events', ...organizerAuthStack, async (req, res) => {
     const {
         title, category, description, location, eventDate, ticketPrice,
         totalTickets, image, tags, highlights, promoCodes,
@@ -99,7 +101,7 @@ router.post('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
  * @route GET /api/organiser/events
  * @desc  Get events created by the logged in organiser
  */
-router.get('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.get('/events', ...organizerAuthStack, async (req, res) => {
     try {
         const events = await prisma.event.findMany({
             where: {
@@ -120,9 +122,13 @@ router.get('/events', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (r
  * @route GET /api/organiser/events/:id
  * @desc  Get single event details for editing
  */
-router.get('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.get('/events/:id', ...organizerAuthStack, async (req, res) => {
     const { id } = req.params;
     try {
+        const settings = await prisma.platformsettings.findFirst() || await prisma.platformsettings.create({ data: {} });
+        const feeRate = Number(settings.platformFeeRate) || 0;
+        const fixedFee = Number(settings.platformFeeFixed) || 0;
+
         const event = await prisma.event.findUnique({
             where: { id: parseInt(id) },
             include: {
@@ -132,6 +138,7 @@ router.get('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), asyn
                 ticketrelease: true,
                 purchaseorder: {
                     select: {
+                        amount: true,
                         platformFee: true,
                         quantity: true
                     }
@@ -144,7 +151,15 @@ router.get('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), asyn
             return res.status(403).json({ error: 'Not authorized' });
         }
 
-        const totalFees = event.purchaseorder.reduce((sum, order) => sum + (order.platformFee || 0), 0);
+        const totalFees = event.purchaseorder.reduce((sum, order) => {
+            const qty = Number(order.quantity) || 0;
+            const amount = Number(order.amount) || 0;
+            const storedFee = Number(order.platformFee) || 0;
+            const effectiveFee = event.serviceFeeType === 'ORGANIZER'
+                ? Number(((amount * feeRate) + (fixedFee * qty)).toFixed(2))
+                : storedFee;
+            return sum + effectiveFee;
+        }, 0);
         const buyerFees = event.serviceFeeType === 'BUYER' ? totalFees : 0;
         const organiserFees = event.serviceFeeType === 'ORGANIZER' ? totalFees : 0;
 
@@ -176,7 +191,7 @@ router.get('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), asyn
  * @route PATCH /api/organiser/events/:id
  * @desc  Update an event's details
  */
-router.patch('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.patch('/events/:id', ...organizerAuthStack, async (req, res) => {
     const { id } = req.params;
     const {
         title, category, description, location, eventDate, ticketPrice,
@@ -313,7 +328,7 @@ router.patch('/events/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), as
  * @route PATCH /api/organiser/releases/:id/toggle
  * @desc  Activate or deactivate a ticket release (single-active enforcement)
  */
-router.patch('/releases/:id/toggle', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.patch('/releases/:id/toggle', ...organizerAuthStack, async (req, res) => {
     const releaseId = parseInt(req.params.id);
     try {
         const release = await prisma.ticketrelease.findUnique({
@@ -354,7 +369,7 @@ router.patch('/releases/:id/toggle', requireAuth, requireRole(['ORGANIZER', 'ADM
  * @route PATCH /api/organiser/releases/:id
  * @desc  Edit a ticket release (name, qty, dates — price locked if sold > 0)
  */
-router.patch('/releases/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.patch('/releases/:id', ...organizerAuthStack, async (req, res) => {
     const releaseId = parseInt(req.params.id);
     const { name, price, quantity, releaseDate, endDate } = req.body;
     try {
@@ -411,7 +426,7 @@ router.patch('/releases/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), 
  * @route POST /api/organiser/events/:id/releases
  * @desc  Add a new ticket release to an existing MULTI event
  */
-router.post('/events/:id/releases', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.post('/events/:id/releases', ...organizerAuthStack, async (req, res) => {
     const eventId = parseInt(req.params.id);
     const { name, price, quantity, releaseDate, endDate, activateImmediately } = req.body;
     try {
@@ -467,7 +482,7 @@ router.post('/events/:id/releases', requireAuth, requireRole(['ORGANIZER', 'ADMI
  * @route DELETE /api/organiser/releases/:id
  * @desc  Delete a ticket release (blocked if any tickets sold)
  */
-router.delete('/releases/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.delete('/releases/:id', ...organizerAuthStack, async (req, res) => {
     const releaseId = parseInt(req.params.id);
     try {
         const release = await prisma.ticketrelease.findUnique({
@@ -503,17 +518,37 @@ router.delete('/releases/:id', requireAuth, requireRole(['ORGANIZER', 'ADMIN']),
  * @route GET /api/organiser/reports
  * @desc  Get sales reports for the organiser's events
  */
-router.get('/reports', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.get('/reports', ...organizerAuthStack, async (req, res) => {
     try {
         const toNumber = (val) => {
             const n = Number(val);
             return Number.isFinite(n) ? n : 0;
         };
+        const settings = await prisma.platformsettings.findFirst() || await prisma.platformsettings.create({ data: {} });
+        const feeRate = toNumber(settings.platformFeeRate);
+        const fixedFee = toNumber(settings.platformFeeFixed);
         const resolveOrderAmount = (order) => toNumber(order.amount);
-        const resolveOrderFee = (order) => {
+        const resolveStoredOrderFee = (order) => {
             if (order.platformFee !== null && order.platformFee !== undefined) return toNumber(order.platformFee);
             if (order.platformFeeCents !== null && order.platformFeeCents !== undefined) return toNumber(order.platformFeeCents) / 100;
             return 0;
+        };
+        const resolveOrderFee = (order, feeType) => {
+            // For ORGANIZER fee type, order.amount stores discounted subtotal.
+            // Recompute fee from amount to avoid legacy stored-fee drift.
+            if (feeType === 'ORGANIZER') {
+                const amount = resolveOrderAmount(order);
+                const qty = toNumber(order.quantity);
+                if (amount <= 0) return 0;
+                return Number(((amount * feeRate) + (fixedFee * qty)).toFixed(2));
+            }
+            return resolveStoredOrderFee(order);
+        };
+        const resolveOrganizerReceives = (gross, fee, feeType) => {
+            // Business rule:
+            // - BUYER pays fee: organizer receives discounted subtotal => gross - fee
+            // - ORGANIZER pays fee: organizer receives discounted subtotal stored in amount => gross
+            return feeType === 'BUYER' ? Math.max(0, gross - fee) : Math.max(0, gross);
         };
         const resolveOrderQuantity = (order) => toNumber(order.quantity);
 
@@ -544,15 +579,16 @@ router.get('/reports', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
         const stats = events.reduce((acc, event) => {
             const eventTotalGross = event.purchaseorder.reduce((sum, order) => sum + resolveOrderAmount(order), 0);
             const eventTotalFees = event.purchaseorder.reduce((sum, order) => {
-                return sum + resolveOrderFee(order);
+                return sum + resolveOrderFee(order, event.serviceFeeType);
             }, 0);
+            const eventOrganizerPaidFees = event.serviceFeeType === 'ORGANIZER' ? eventTotalFees : 0;
             const successfulOrderTickets = event.purchaseorder.reduce((sum, order) => sum + resolveOrderQuantity(order), 0);
             const gross = eventTotalGross;
             const fee = eventTotalFees;
-            const net = Math.max(0, gross - fee);
+            const net = resolveOrganizerReceives(gross, fee, event.serviceFeeType);
 
             acc.totalGross += gross;
-            acc.totalFees += fee;
+            acc.totalFees += eventOrganizerPaidFees;
             acc.totalNet += net;
 
             acc.totalTicketsSold += successfulOrderTickets;
@@ -571,14 +607,19 @@ router.get('/reports', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
             select: {
                 amount: true,
                 platformFee: true,
-                platformFeeCents: true
+                platformFeeCents: true,
+                event: {
+                    select: {
+                        serviceFeeType: true
+                    }
+                }
             }
         });
 
         const revenueThisMonth = ordersThisMonth.reduce((sum, order) => {
             const gross = resolveOrderAmount(order);
-            const fee = resolveOrderFee(order);
-            return sum + Math.max(0, gross - fee);
+            const fee = resolveOrderFee(order, order.event?.serviceFeeType);
+            return sum + resolveOrganizerReceives(gross, fee, order.event?.serviceFeeType);
         }, 0);
 
         const report = {
@@ -601,19 +642,20 @@ router.get('/reports', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
             events: events.map(e => {
                 const eventTotalGross = e.purchaseorder.reduce((sum, order) => sum + resolveOrderAmount(order), 0);
                 const eventTotalFees = e.purchaseorder.reduce((sum, order) => {
-                    return sum + resolveOrderFee(order);
+                    return sum + resolveOrderFee(order, e.serviceFeeType);
                 }, 0);
+                const organizerPaidFee = e.serviceFeeType === 'ORGANIZER' ? eventTotalFees : 0;
                 const successfulOrderTickets = e.purchaseorder.reduce((sum, order) => sum + resolveOrderQuantity(order), 0);
                 const gross = eventTotalGross;
                 const fee = eventTotalFees;
-                const net = Math.max(0, gross - fee);
+                const net = resolveOrganizerReceives(gross, fee, e.serviceFeeType);
                 
                 return {
                     id: e.id,
                     title: e.title,
                     grossRevenue: gross,
                     netPayout: net,
-                    platformFee: fee,
+                    platformFee: organizerPaidFee,
                     feeType: e.serviceFeeType,
                     ticketsSold: successfulOrderTickets,
                     totalTickets: e.totalTickets,
@@ -647,7 +689,7 @@ router.get('/reports', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (
  * @route GET /api/organiser/events/:id/promos
  * @desc  Get all promo codes for an event
  */
-router.get('/events/:id/promos', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.get('/events/:id/promos', ...organizerAuthStack, async (req, res) => {
     const { id } = req.params;
     try {
         const event = await prisma.event.findUnique({ where: { id: parseInt(id) } });
@@ -670,7 +712,7 @@ router.get('/events/:id/promos', requireAuth, requireRole(['ORGANIZER', 'ADMIN']
  * @route POST /api/organiser/events/:id/promos
  * @desc  Create a promo code for an event
  */
-router.post('/events/:id/promos', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.post('/events/:id/promos', ...organizerAuthStack, async (req, res) => {
     const { id } = req.params;
     const { code, type, value, limit, expiry } = req.body;
     if (!code || !type || !value) {
@@ -706,7 +748,7 @@ router.post('/events/:id/promos', requireAuth, requireRole(['ORGANIZER', 'ADMIN'
  * @route DELETE /api/organiser/events/:eventId/promos/:promoId
  * @desc  Delete a promo code
  */
-router.delete('/events/:eventId/promos/:promoId', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.delete('/events/:eventId/promos/:promoId', ...organizerAuthStack, async (req, res) => {
     const { eventId, promoId } = req.params;
     try {
         const event = await prisma.event.findUnique({ where: { id: parseInt(eventId) } });
@@ -726,7 +768,7 @@ router.delete('/events/:eventId/promos/:promoId', requireAuth, requireRole(['ORG
  * @route GET /api/organiser/events/:id/scanner-stats
  * @desc  Get live stats for ticket scanning
  */
-router.get('/events/:id/scanner-stats', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.get('/events/:id/scanner-stats', ...organizerAuthStack, async (req, res) => {
     const { id } = req.params;
     try {
         const event = await prisma.event.findUnique({
@@ -781,7 +823,7 @@ router.get('/events/:id/scanner-stats', requireAuth, requireRole(['ORGANIZER', '
  * @route GET /api/organiser/events/:id/attendees
  * @desc  Get attendee list for an event
  */
-router.get('/events/:id/attendees', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.get('/events/:id/attendees', ...organizerAuthStack, async (req, res) => {
     const { id } = req.params;
     try {
         const event = await prisma.event.findUnique({ where: { id: parseInt(id) } });
@@ -811,7 +853,7 @@ router.get('/events/:id/attendees', requireAuth, requireRole(['ORGANIZER', 'ADMI
  * @route PATCH /api/organiser/releases/:id/toggle
  * @desc  Toggle activation of a ticket release
  */
-router.patch('/releases/:id/toggle', requireAuth, requireRole(['ORGANIZER', 'ADMIN']), async (req, res) => {
+router.patch('/releases/:id/toggle', ...organizerAuthStack, async (req, res) => {
     const { id } = req.params;
     try {
         const release = await prisma.ticketrelease.findUnique({

@@ -87,6 +87,7 @@ const createCheckoutSession = async (req, res) => {
                 if (promo.discountType === 'PERCENTAGE') {
                     discountValue = (subtotal * promo.discountValue) / 100;
                 } else if (promo.discountType === 'FIXED') {
+                    // Fixed promo value is applied once per checkout.
                     discountValue = promo.discountValue;
                 }
                 
@@ -96,13 +97,18 @@ const createCheckoutSession = async (req, res) => {
 
             const settings = await tx.platformsettings.findFirst() || await tx.platformsettings.create({ data: {} });
             const effectiveFeeRate = settings.platformFeeRate;
-            const fee = (unitPrice === 0)
-                ? 0
-                : parseFloat(((subtotal * effectiveFeeRate) + (settings.platformFeeFixed * qtyInt)).toFixed(2));
+            const fixedFee = settings.platformFeeFixed;
             const buyerPaysFee = event.serviceFeeType === 'BUYER';
+
+            // Platform fee must be calculated from post-promo amount.
+            const clampedDiscount = Math.max(0, Math.min(discountValue, subtotal));
+            const discountedSubtotal = Math.max(0, subtotal - clampedDiscount);
+            const fee = (discountedSubtotal <= 0)
+                ? 0
+                : parseFloat(((discountedSubtotal * effectiveFeeRate) + (fixedFee * qtyInt)).toFixed(2));
             
             // Buyer total should include fee only when fee type is BUYER.
-            const finalTotal = Math.max(0, (subtotal - discountValue) + (buyerPaysFee ? fee : 0));
+            const finalTotal = Math.max(0, discountedSubtotal + (buyerPaysFee ? fee : 0));
             
             // DUAL-WRITE: Calculate cents for future migration
             const finalTotalCents = Math.round(finalTotal * 100);

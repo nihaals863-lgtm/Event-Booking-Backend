@@ -1,6 +1,8 @@
 const sgMail = require('@sendgrid/mail');
 const qrcode = require('qrcode');
 const puppeteer = require('puppeteer');
+const PDFDocument = require('pdfkit');
+const crypto = require('crypto');
 
 // Configure SendGrid — fail explicitly if key is missing
 if (!process.env.SENDGRID_API_KEY) {
@@ -21,6 +23,8 @@ const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL
 const REPLY_TO_EMAIL = process.env.SENDGRID_REPLY_TO_EMAIL || process.env.ADMIN_EMAIL;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+const BACKEND_BASE_URL = (process.env.BACKEND_BASE_URL || `http://localhost:${process.env.PORT || 4000}`).replace(/\/$/, '');
+const TICKET_DOWNLOAD_TOKEN_SECRET = process.env.TICKET_DOWNLOAD_TOKEN_SECRET || process.env.JWT_SECRET || 'local_ticket_download_secret';
 
 // Puppeteer Singleton Browser Manager
 let browserInstance = null;
@@ -56,6 +60,39 @@ function withTimeout(promise, ms, errorName) {
         setTimeout(() => reject(new Error(`${errorName} timed out after ${ms}ms`)), ms);
     });
     return Promise.race([promise, timeout]);
+}
+
+function createTicketDownloadToken(orderId, email, ttlSeconds = 60 * 60 * 24 * 30) {
+    const payload = {
+        orderId: String(orderId),
+        email: String(email || '').toLowerCase(),
+        exp: Date.now() + (ttlSeconds * 1000)
+    };
+    const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+    const sig = crypto.createHmac('sha256', TICKET_DOWNLOAD_TOKEN_SECRET).update(encoded).digest('base64url');
+    return `${encoded}.${sig}`;
+}
+
+function verifyTicketDownloadToken(token, expectedOrderId, expectedEmail) {
+    if (!token || typeof token !== 'string' || !token.includes('.')) return false;
+    const [encoded, providedSig] = token.split('.');
+    const expectedSig = crypto.createHmac('sha256', TICKET_DOWNLOAD_TOKEN_SECRET).update(encoded).digest('base64url');
+
+    if (!providedSig) return false;
+    const providedSigBuffer = Buffer.from(providedSig);
+    const expectedSigBuffer = Buffer.from(expectedSig);
+    if (providedSigBuffer.length !== expectedSigBuffer.length) return false;
+    if (!crypto.timingSafeEqual(providedSigBuffer, expectedSigBuffer)) return false;
+
+    try {
+        const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+        if (!payload || payload.orderId !== String(expectedOrderId)) return false;
+        if ((payload.email || '').toLowerCase() !== String(expectedEmail || '').toLowerCase()) return false;
+        if (!payload.exp || Date.now() > Number(payload.exp)) return false;
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -187,6 +224,83 @@ async function generateTicketPDF(eventData, attendeeData, orderData, qrCodes) {
 }
 
 /**
+ * Generate a fallback PDF without browser dependencies.
+ * This is used when Puppeteer PDF generation fails in production environments.
+ */
+async function generateTicketPDFWithPdfKit(eventData, attendeeData, orderData, qrCodes) {
+    try {
+        return await new Promise((resolve, reject) => {
+            const doc = new PDFDocument({ size: 'A4', margin: 42 });
+            const chunks = [];
+
+            doc.on('data', chunk => chunks.push(chunk));
+            doc.on('end', () => resolve(Buffer.concat(chunks)));
+            doc.on('error', reject);
+
+            const safeTitle = eventData.title || 'Event Ticket';
+            const safeDate = eventData.eventDate
+                ? new Date(eventData.eventDate).toLocaleString('en-AU', { dateStyle: 'full', timeStyle: 'short' })
+                : 'Date TBA';
+            const safeLocation = eventData.location || 'Venue TBA';
+            const safeEmail = attendeeData.email || 'N/A';
+            const currency = (orderData.currency || 'AUD').toUpperCase();
+            const orderAmount = typeof orderData.amount === 'number'
+                ? `${currency} ${orderData.amount.toFixed(2)}`
+                : `${currency} ${orderData.amount || '0.00'}`;
+
+            qrCodes.forEach((qr, index) => {
+                if (index > 0) doc.addPage();
+
+                doc.rect(30, 30, doc.page.width - 60, doc.page.height - 60)
+                    .lineWidth(1)
+                    .strokeColor('#E2E8F0')
+                    .stroke();
+
+                doc.fontSize(10).fillColor('#6366F1').text('Invoice Manifest', 50, 55, { uppercase: true });
+                doc.fontSize(24).fillColor('#0F172A').text(safeTitle, 50, 72, { width: 500 });
+                doc.fontSize(11).fillColor('#64748B').text(safeDate, 50, 108);
+                doc.fontSize(11).fillColor('#64748B').text(safeLocation, 50, 124);
+
+                doc.fontSize(10).fillColor('#94A3B8').text('Order ID', 50, 170);
+                doc.fontSize(12).fillColor('#0F172A').text(orderData.id || 'N/A', 50, 184);
+                doc.fontSize(10).fillColor('#94A3B8').text('Pass', 370, 170);
+                doc.fontSize(12).fillColor('#0F172A').text(`${index + 1} of ${qrCodes.length}`, 370, 184);
+
+                doc.fontSize(10).fillColor('#94A3B8').text('Attendee', 50, 220);
+                doc.fontSize(12).fillColor('#0F172A').text(attendeeData.name || 'Guest', 50, 234);
+                doc.fontSize(11).fillColor('#64748B').text(safeEmail, 50, 250);
+
+                doc.fontSize(10).fillColor('#94A3B8').text('Final Total', 370, 220);
+                doc.fontSize(18).fillColor('#4F46E5').text(orderAmount, 370, 236);
+
+                try {
+                    const qrBuffer = Buffer.from(String(qr).split(',')[1] || '', 'base64');
+                    if (qrBuffer.length > 0) {
+                        doc.image(qrBuffer, 210, 320, { fit: [180, 180], align: 'center', valign: 'center' });
+                        doc.fontSize(10).fillColor('#64748B').text('Scan this QR at event entry gate', 185, 512);
+                    }
+                } catch (imageErr) {
+                    doc.fontSize(10).fillColor('#EF4444').text(`QR rendering failed for pass ${index + 1}`, 50, 360);
+                    console.error(`[PDFKIT_QR_ERROR] orderId=${orderData.id} pass=${index + 1} error=${imageErr.message}`);
+                }
+
+                doc.fontSize(9)
+                    .fillColor('#94A3B8')
+                    .text('Powered by EventHubix • This PDF is system-generated and valid for admission.', 50, 760, {
+                        width: 500,
+                        align: 'center'
+                    });
+            });
+
+            doc.end();
+        });
+    } catch (error) {
+        console.error(`[PDFKIT_ERROR] orderId=${orderData.id} error=${error.message}`);
+        return null;
+    }
+}
+
+/**
  * Base Layout Wrapper for consistency (Premium Redesign)
  */
 function getEmailLayout(content, preheader = '') {
@@ -269,7 +383,11 @@ function getCTAButton(text, url) {
 /**
  * Template: Ticket Confirmation (Buyer)
  */
-function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, location, orderId, amount, ticketsCount, qrCodes, hasPdfAttachment = false }) {
+function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, location, orderId, amount, ticketsCount, qrCodes, hasPdfAttachment = false, downloadToken = '' }) {
+    const ticketUrl = orderId
+        ? `${FRONTEND_URL}/order/${orderId}/tickets`
+        : `${FRONTEND_URL}/order-tickets`;
+
     const formattedDate = (eventDate instanceof Date) 
         ? eventDate.toLocaleString('en-AU', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
         : (eventDate || 'Coming Soon');
@@ -280,6 +398,8 @@ function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, lo
             <p style="margin: 15px 0 0; color: #64748B; font-size: 10px; text-transform: uppercase; font-weight: 800; letter-spacing: 0.1em;">Pass ${index + 1} of ${ticketsCount}</p>
         </div>
     `).join('');
+
+    const downloadUrl = `${BACKEND_BASE_URL}/api/public/orders/${orderId}/tickets/download`;
 
     const content = `
         <div style="text-align: center; margin-bottom: 35px;">
@@ -339,7 +459,8 @@ function getTicketConfirmationTemplate({ attendeeName, eventTitle, eventDate, lo
         </div>
         ` : ''}
 
-        ${getCTAButton('View My Tickets', `${FRONTEND_URL}/order-tickets`)}
+        ${getCTAButton('View My Tickets', ticketUrl)}
+        ${getCTAButton('Download Ticket PDF', `${downloadUrl}?token=${downloadToken}`)}
         
         <p style="text-align: center; color: #94A3B8; font-size: 13px; margin-top: 20px;">
             Need a refund? Check out our <a href="${FRONTEND_URL}/terms" style="color: #4F46E5; text-decoration: none;">refund policy</a> or reply to this email.
@@ -572,8 +693,22 @@ async function sendTicketConfirmation(attendeeData, orderData, tickets) {
         }
     }
 
+    // Browserless fallback: always try PDFKit before giving up.
+    if (!pdfBuffer) {
+        pdfBuffer = await generateTicketPDFWithPdfKit(
+            { title: orderData.eventTitle, eventDate: orderData.eventDate, location: orderData.location },
+            attendeeData,
+            orderData,
+            (qrCodes || []).filter(Boolean)
+        );
+        if (pdfBuffer) {
+            console.log(`[PDFKIT_FALLBACK_SUCCESS] orderId=${orderData.id} tickets=${tickets.length}`);
+        }
+    }
+
     const hasPdfAttachment = !!pdfBuffer;
 
+    const downloadToken = createTicketDownloadToken(orderData.id, attendeeData.email);
     const htmlTemplate = getTicketConfirmationTemplate({
         attendeeName: attendeeData.name,
         eventTitle: orderData.eventTitle,
@@ -583,7 +718,8 @@ async function sendTicketConfirmation(attendeeData, orderData, tickets) {
         amount: orderData.amount,
         ticketsCount: tickets.length,
         qrCodes: qrCodes,
-        hasPdfAttachment
+        hasPdfAttachment,
+        downloadToken
     });
 
     let attachments = [];
@@ -734,5 +870,6 @@ module.exports = {
     sendOrganizerSaleNotification,
     sendAdminNewOrganizerAlert,
     sendNewsletterWelcome,
-    processPurchaseEmails
+    processPurchaseEmails,
+    verifyTicketDownloadToken
 };

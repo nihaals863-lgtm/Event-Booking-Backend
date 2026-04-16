@@ -2,7 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const prisma = require('../../config/db');
 const emailService = require('../../services/emailService');
-const { requireAuth, requireRole } = require('../../middlewares/authMiddleware');
+const { requireAuth, requireRole, requireApprovedOrganizer } = require('../../middlewares/authMiddleware');
 
 const router = express.Router();
 
@@ -142,13 +142,16 @@ router.post('/purchase', async (req, res) => {
             const settings = await tx.platformsettings.findFirst() || await tx.platformsettings.create({ data: {} });
             const effectiveFeeRate = settings.platformFeeRate;
             const globalFeeFixed = settings.platformFeeFixed;
-
-            const fee = (ticketPrice === 0)
-                ? 0 
-                : parseFloat(((subtotal * effectiveFeeRate) + (globalFeeFixed * quantity)).toFixed(2));
             const buyerPaysFee = event.serviceFeeType === 'BUYER';
+
+            // Platform fee must be calculated from post-promo amount.
+            const clampedDiscount = Math.max(0, Math.min(discountAmount, subtotal));
+            const discountedSubtotal = Math.max(0, subtotal - clampedDiscount);
+            const fee = (discountedSubtotal <= 0)
+                ? 0 
+                : parseFloat(((discountedSubtotal * effectiveFeeRate) + (globalFeeFixed * quantity)).toFixed(2));
             
-            const finalTotal = subtotal + (buyerPaysFee ? fee : 0) - discountAmount;
+            const finalTotal = Math.max(0, discountedSubtotal + (buyerPaysFee ? fee : 0));
             const finalTotalCents = Math.round(finalTotal * 100);
 
             // 3. Create Purchase Order Tracking
@@ -288,7 +291,7 @@ router.post('/purchase', async (req, res) => {
  * @route POST /api/tickets/validate
  * @desc  Validate a ticket QR payload (Used by scanner)
  */
-router.post('/validate', requireAuth, requireRole(['ADMIN', 'ORGANIZER']), async (req, res) => {
+router.post('/validate', requireAuth, requireRole(['ADMIN', 'ORGANIZER']), requireApprovedOrganizer, async (req, res) => {
     const { qrPayload } = req.body;
 
     if (!qrPayload) {

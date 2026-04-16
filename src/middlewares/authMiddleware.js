@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const prisma = require('../config/db');
 
 const requireAuth = (req, res, next) => {
     const authHeader = req.headers.authorization;
@@ -26,7 +27,46 @@ const requireRole = (allowedRoles) => {
     };
 };
 
+/**
+ * For ORGANIZER role only: require live DB organizerStatus === APPROVED.
+ * ADMIN/TENANT pass through unchanged.
+ */
+const requireApprovedOrganizer = async (req, res, next) => {
+    if (!req.user || req.user.role !== 'ORGANIZER') {
+        return next();
+    }
+
+    try {
+        const user = await prisma.user.findUnique({
+            where: { id: req.user.id },
+            select: { organizerStatus: true }
+        });
+
+        if (!user) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        if (user.organizerStatus === 'REJECTED') {
+            return res.status(403).json({
+                error: 'Your organizer account application has been rejected. Please contact support.'
+            });
+        }
+
+        if (user.organizerStatus !== 'APPROVED') {
+            return res.status(403).json({
+                error: 'Your organizer account is awaiting admin approval. Please wait until admin approves your request.'
+            });
+        }
+
+        next();
+    } catch (err) {
+        console.error('requireApprovedOrganizer error:', err);
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
 module.exports = {
     requireAuth,
-    requireRole
+    requireRole,
+    requireApprovedOrganizer
 };
